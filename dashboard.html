@@ -308,7 +308,7 @@
       </div>`}
       <div class="cmd">${s.start ? esc(s.start) : 'no start command'}${s.how && s.how !== s.start ? ` · ${esc(s.how)}` : ''} · ${esc(s.dir)}</div>
       ${s.status === 'disabled' ? `<div class="hint">Turned off in settings.json. It won't start until it's turned on.</div>` : ''}
-      ${s.error ? `<div class="err">${esc(s.error)}</div>` : ''}`;
+      ${s.error ? `<div class="err">${esc(s.error)}${s.clash ? ` <button class="small danger" data-do="free-port">Stop pid ${s.clash.pid} and start ${esc(s.name)}</button>` : ''}</div>` : ''}`;
   }
 
   // ---- logs ----
@@ -460,7 +460,7 @@
   }
 
   // ---- actions ----
-  const done = { stop: 'stopped', start: 'started', restart: 'restarted', enable: 'turned on', disable: 'turned off' };
+  const done = { stop: 'stopped', start: 'started', restart: 'restarted', enable: 'turned on', disable: 'turned off', 'free-port': 'port freed, starting' };
   document.addEventListener('click', async (e) => {
     const opener = e.target.closest('[data-open]');
     if (opener) return opener.dataset.open === 'deploy' ? openDeploy() : openSettings();
@@ -480,6 +480,10 @@
       return navigator.clipboard.writeText(dir).then(() => toast('Copied the folder path'), () => toast(dir));
     }
     if (what === 'stop' && !confirm(`Stop ${name}? It stays stopped until you start it again (or the supervisor restarts).`)) return;
+    if (what === 'free-port') {
+      const c = latest?.servers.find((s) => s.name === name)?.clash;
+      if (!c || !confirm(`Stop ${c.name} (pid ${c.pid}), which has port ${c.port}, and start ${name}?`)) return;
+    }
     if (what === 'disable' && !confirm(`Turn ${name} off? It's stopped and stays off, even after restarts, until you turn it on. (This sets "enabled": false in settings.json.)`)) return;
     b.disabled = true;
     try {

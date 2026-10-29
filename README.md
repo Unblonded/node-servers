@@ -98,7 +98,8 @@ Double-click **`uninstall.bat`**. It removes the task and stops every server. Yo
 ## Troubleshooting
 
 - **"The user name or password is incorrect"** while installing: use your Windows account password, not your PIN.
-- **A server keeps crashing:** open its log. A port another program already uses is the usual cause.
+- **A server keeps crashing:** open its log. A port another program already uses is the usual cause. When that's it, the dashboard says which process has the port, with a button to stop that process and start the server.
+- **Old copies left running:** if the service is ended hard (Task Scheduler's *End*, a crash), its servers can keep running. The next start finds them (it notes every process each server starts) and stops them first. To restart the service, the dashboard's **Restart service** is cleaner.
 - **"Can't tell how to start it":** give its `package.json` a `start` script, or set `servers.<folder>.start` in `settings.json`.
 - **Updates fail on a private repo:** run `git pull` once yourself in that folder, so Windows saves your GitHub sign-in. The service runs as you, so it uses the same sign-in.
 - **The dashboard says "Open this with open-dashboard.bat":** it needs the key that `open-dashboard.bat` adds to the address.

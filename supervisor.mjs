@@ -40,6 +40,7 @@ const DEPLOY = (() => {
 })();
 const LOGS = path.join(here, 'logs');
 const PIDS = path.join(LOGS, 'pids.json');
+const PORTS = path.join(LOGS, 'ports.json'); // the ports each server has listened on, to explain clashes
 const KEY_FILE = path.join(here, '.dashboard-key');
 const URL_FILE = path.join(here, 'dashboard.url');
 const RELAUNCH = 75; // asks run.cmd to start this again (it was updated)
@@ -172,10 +173,13 @@ function scan() {
 
 // ---- servers ----
 const servers = new Map(); // name → state
+// Each server's cmd, and every process under it with when it started, so a later run can stop exactly
+// these even when the cmd above them is gone.
 const savePids = () => {
-  const pids = Object.fromEntries([...servers.values()].filter((s) => s.child).map((s) => [s.cfg.name, { pid: s.child.pid, at: s.startedAt }]));
+  const pids = Object.fromEntries([...servers.values()].filter((s) => s.child).map((s) => [s.cfg.name, { pid: s.child.pid, at: s.startedAt, tree: s.tree }]));
   fs.writeFileSync(PIDS, JSON.stringify({ supervisor: process.pid, servers: pids }, null, 2));
 };
+const knownPorts = readJson(PORTS) || {}; // name → ports
 
 async function startServer(s) {
   clearTimeout(s.retry);
@@ -201,16 +205,20 @@ async function startServer(s) {
     if (s.held || s.child || !servers.has(s.cfg.name)) return;
   }
   s.status = 'running';
-  s.error = '';
+  if (!s.clash) s.error = ''; // a port clash stays explained until it gets its port
   s.startedAt = Date.now();
   s.health = null;
   s.healthFails = 0;
+  s.tree = [];
+  s.recent = '';
   s.log.line(`── starting: ${s.cfg.start} (in ${s.cfg.dir})`);
   const child = spawn(s.cfg.start, { cwd: s.cfg.dir, shell: true, windowsHide: true, env: { ...process.env, ...s.cfg.env } });
   s.child = child;
   savePids();
-  child.stdout.on('data', (b) => s.log.chunk(b));
-  child.stderr.on('data', (b) => s.log.chunk(b));
+  setTimeout(sample, 4000); // note the processes under it soon, in case this run is ended hard
+  const output = (b) => { s.log.chunk(b); s.recent = (s.recent + b).slice(-4000); };
+  child.stdout.on('data', output);
+  child.stderr.on('data', output);
   child.on('error', (err) => s.log.line(`couldn't start: ${err.message}`));
   child.on('exit', (code, signal) => {
     if (s.child !== child) return;
@@ -228,7 +236,44 @@ async function startServer(s) {
     s.log.line(`── ${s.error}; starting again in ${s.backoff / 1000}s`);
     say(`${s.cfg.name}: ${s.error}; starting again in ${s.backoff / 1000}s`);
     s.retry = setTimeout(() => startServer(s), s.backoff);
+    if (ranFor < 60_000) findClash(s, ranFor);
   });
+}
+
+// A server that stops soon after starting is often finding its port taken, by an old copy of itself or
+// another program. Say which process has it (the dashboard can stop that process).
+async function findClash(s, ranFor) {
+  const said = /EADDRINUSE\D*?(\d{2,5})\s*$/m.exec(s.recent)?.[1];
+  const ports = new Set([...(knownPorts[s.cfg.name] || []), ...(said ? [Number(said)] : [])]);
+  if (!ports.size) return;
+  try {
+    const [holders, procs] = await Promise.all([listeners(), processList()]);
+    for (const port of ports) {
+      const p = procs.find((x) => x.pid === holders.get(port));
+      if (!p || s.child) continue;
+      const other = [...servers.values()].find((o) => o !== s && o.tree?.some((t) => t.pid === p.pid));
+      if (other) {
+        s.clash = null;
+        s.error = `Port ${port} is taken by ${other.cfg.name}, another server here. Give one of them a different port.`;
+        s.log.line(`── ${s.error}`);
+        return;
+      }
+      s.clash = { port, pid: p.pid, name: p.name, created: p.created };
+      s.error = `Port ${port} is taken by ${p.name} (pid ${p.pid}, running since ${new Date(p.created).toLocaleString()}), so it stopped after ${Math.round(ranFor / 1000)}s. Probably an old copy of it: stop that process and it starts again.`;
+      s.log.line(`── ${s.error}`);
+      if (s.clashSaid !== p.pid) say(`${s.cfg.name}: port ${port} is taken by ${p.name} (pid ${p.pid})`);
+      s.clashSaid = p.pid;
+      return;
+    }
+  } catch { /* only an explanation */ }
+}
+// Listening port → pid. Listening sockets have a foreign address of 0.0.0.0:0 or [::]:0 (whatever the
+// language's word for LISTENING).
+async function listeners() {
+  const net = await run('netstat', ['-ano'], here, { timeout: 30_000 });
+  const ports = new Map();
+  for (const m of net.matchAll(/^\s*TCP\s+\S+:(\d+)\s+(?:0\.0\.0\.0|\[::\]):0\s+\S+\s+(\d+)\s*$/gm)) ports.set(Number(m[1]), Number(m[2]));
+  return ports;
 }
 
 function stopServer(s) {
@@ -246,7 +291,7 @@ const restartServer = async (s) => { await stopServer(s); s.backoff = 0; startSe
 
 function addServer(cfg) {
   const s = { cfg, log: logFile(cfg.name), child: null, status: 'starting', restarts: 0, backoff: 0, held: false, error: '', lastCheck: 0, lastUpdate: null, updating: false,
-    repo: null, health: null, healthFails: 0, mem: null, cpu: null, ports: [], history: [] };
+    repo: null, health: null, healthFails: 0, mem: null, cpu: null, ports: [], history: [], tree: [], recent: '', clash: null };
   servers.set(cfg.name, s);
   startServer(s);
 }
@@ -390,20 +435,17 @@ async function sample() {
   if (!running.length || sampling) return;
   sampling = true;
   try {
-    const [procs, net] = await Promise.all([processList(), run('netstat', ['-ano'], here, { timeout: 30_000 })]);
+    const [procs, holders] = await Promise.all([processList(), listeners()]);
     const now = Date.now();
     const wall = now - lastSample;
     const kids = new Map();
     const info = new Map();
-    for (const { pid, parent, mem, time } of procs) {
-      info.set(pid, { mem, time });
-      if (parent !== pid) kids.set(parent, [...(kids.get(parent) || []), pid]);
+    for (const p of procs) {
+      info.set(p.pid, p);
+      if (p.parent !== p.pid) kids.set(p.parent, [...(kids.get(p.parent) || []), p.pid]);
     }
-    // Listening sockets have a foreign address of 0.0.0.0:0 or [::]:0 (whatever the language's word for LISTENING).
-    const ports = new Map();
-    for (const m of net.matchAll(/^\s*TCP\s+\S+:(\d+)\s+(?:0\.0\.0\.0|\[::\]):0\s+\S+\s+(\d+)\s*$/gm)) {
-      ports.set(Number(m[2]), [...(ports.get(Number(m[2])) || []), Number(m[1])]);
-    }
+    const ports = new Map(); // pid → ports
+    for (const [port, pid] of holders) ports.set(pid, [...(ports.get(pid) || []), port]);
     const cpus = os.cpus().length || 1;
     for (const s of running) {
       const tree = new Set();
@@ -422,11 +464,18 @@ async function sample() {
       s.mem = mem;
       s.cpu = lastSample && wall > 0 ? Math.min(100, (used / (wall * 1e4 * cpus)) * 100) : null;
       s.ports = [...open].sort((a, b) => a - b);
+      s.tree = [...tree].filter((pid) => info.has(pid)).map((pid) => ({ pid, created: info.get(pid).created }));
+      if (s.ports.length) {
+        if (s.clash) { s.clash = null; s.error = ''; }
+        const seen = new Set([...(knownPorts[s.cfg.name] || []), ...s.ports]);
+        if (seen.size !== (knownPorts[s.cfg.name] || []).length) { knownPorts[s.cfg.name] = [...seen].slice(-10); fs.writeFileSync(PORTS, JSON.stringify(knownPorts, null, 2)); }
+      }
       s.history.push([now, mem, s.cpu ?? 0]);
       if (s.history.length > HISTORY) s.history.shift();
     }
     prevTimes = new Map([...info].map(([pid, p]) => [pid, p.time]));
     lastSample = now;
+    savePids();
   } catch (err) {
     if (!sample.failed) say(`Couldn't read memory and CPU use: ${(err.output || err.message).split('\n')[0]}`);
     sample.failed = true;
@@ -511,7 +560,7 @@ function statusJson() {
     name: s.cfg.name, dir: s.cfg.dir, start: s.cfg.start, how: s.cfg.how, status: s.held ? 'stopped' : s.status, pid: s.child?.pid || null,
     upSince: s.child ? s.startedAt : null, restarts: s.restarts, error: s.error, git: isRepo(s.cfg.dir) && s.cfg.update !== false,
     lastCheck: s.lastCheck || null, lastUpdate: s.lastUpdate, updating: s.updating, disabled: s.cfg.disabled, repo: s.repo,
-    healthUrl: s.cfg.health, health: s.health, mem: s.mem, cpu: s.cpu, ports: s.ports, history: s.history.map(([, mem]) => mem),
+    healthUrl: s.cfg.health, health: s.health, clash: s.clash, mem: s.mem, cpu: s.cpu, ports: s.ports, history: s.history.map(([, mem]) => mem),
   }));
 }
 
@@ -599,6 +648,22 @@ function startDashboard(port, key) {
         return send(200, { ok: true });
       } catch (err) { return send(400, { error: err.message }); }
     }
+    const free = /^\/api\/free-port\/([\w.-]+)$/.exec(url.pathname);
+    if (req.method === 'POST' && free) {
+      const s = servers.get(free[1]);
+      if (!s?.clash) return send(404, { error: 'Nothing is in its way now' });
+      const { port, pid, created } = s.clash;
+      // Only the process that had its port when that was noticed, if it still has it.
+      const [holders, procs] = await Promise.all([listeners(), processList()]);
+      if (holders.get(port) !== pid || !procs.some((p) => p.pid === pid && p.created === created)) { s.clash = null; return send(409, { error: `pid ${pid} doesn't have port ${port} any more` }); }
+      say(`${s.cfg.name}: stopping pid ${pid}, which had its port ${port} (from the dashboard)`);
+      await killTree(pid);
+      s.clash = null;
+      s.error = '';
+      s.backoff = 0;
+      if (!s.held) startServer(s);
+      return send(200, { ok: true });
+    }
     const act = /^\/api\/(restart|update|stop|start)\/([\w.-]+)$/.exec(url.pathname);
     if (req.method === 'POST' && act) {
       const s = servers.get(act[2]);
@@ -648,22 +713,23 @@ async function stopLeftovers() {
   try { procs = await processList(); } catch (err) { say(`Couldn't list processes to tidy up: ${err.message}`); return; }
   const kids = new Map();
   for (const p of procs) if (p.parent !== p.pid) kids.set(p.parent, [...(kids.get(p.parent) || []), p]);
+  const stopped = new Set(); // taskkill /T ends what's under each one too
+  const stop = async (name, pid, what = 'a process') => {
+    if (stopped.has(pid)) return;
+    say(`${name}: stopping ${what} a previous run left behind (pid ${pid})`);
+    await killTree(pid);
+    const mark = (p) => { stopped.add(p); (kids.get(p) || []).forEach((k) => mark(k.pid)); };
+    mark(pid);
+  };
   for (const [name, saved] of entries) {
-    const { pid, at = 0 } = typeof saved === 'number' ? { pid: saved } : saved;
+    const { pid, at = 0, tree = [] } = typeof saved === 'number' ? { pid: saved } : saved;
     const ours = (p) => /^(cmd|node|npm|conhost)(\.exe)?$/i.test(p.name) && p.created >= at - 2000;
-    if (procs.some((p) => p.pid === pid && ours(p))) {
-      say(`${name}: stopping the copy a previous run left behind (pid ${pid})`);
-      await killTree(pid);
-      continue;
-    }
-    // Its cmd is gone: stop whatever it started that's still running.
-    const left = [];
-    const walk = (parent) => { for (const p of kids.get(parent) || []) if (ours(p) && !left.includes(p.pid)) { left.push(p.pid); walk(p.pid); } };
-    walk(pid);
-    for (const orphan of left) {
-      say(`${name}: stopping a process a previous run left behind (pid ${orphan})`);
-      await killTree(orphan);
-    }
+    if (procs.some((p) => p.pid === pid && ours(p))) await stop(name, pid, 'the copy');
+    // Processes noted under it last time, still running: the same pid and the same start time.
+    for (const t of tree) if (procs.some((p) => p.pid === t.pid && Math.abs(p.created - t.created) < 1000)) await stop(name, t.pid);
+    // And anything else its cmd started (if it ended before they were noted).
+    const walk = async (parent) => { for (const p of kids.get(parent) || []) if (ours(p) && !stopped.has(p.pid)) { await stop(name, p.pid); await walk(p.pid); } };
+    await walk(pid);
   }
 }
 async function looksLikeOurs(pid, kind = /^(cmd|node|npm)$/i) {
