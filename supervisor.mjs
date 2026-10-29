@@ -14,8 +14,10 @@
 //     changed; then restarts it.
 // New folders start within a few seconds, and removed ones stop. settings.json (optional) can change the
 // check interval and dashboard port, and override any server's start command, update, env or turn it off.
-// A dashboard at http://127.0.0.1:3399 (this PC only, behind a key) shows them, can restart, update, stop
-// and start each one, and can deploy a new one from GitHub. open-dashboard.bat opens it.
+// A server can have a health check (a URL or port): it's restarted when it stops answering three times in a row.
+// A dashboard at http://127.0.0.1:3399 (this PC only, behind a key) shows them with their memory, CPU and ports,
+// can restart, update, stop, start, turn off and on each one, edit settings.json, and can deploy a new one
+// from GitHub. open-dashboard.bat opens it.
 // It updates itself the same way from its own repo, then restarts (run.cmd starts it again).
 // install.bat registers run.cmd with Windows to start this when the PC turns on.
 //   node supervisor.mjs            run everything
@@ -24,6 +26,7 @@ import { execFile, spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -130,8 +133,10 @@ function detect(name, dir, over = {}) {
   }
   if (!start && pkg?.main && fs.existsSync(path.join(dir, pkg.main))) { start = `node ${pkg.main}`; how = 'package.json "main"'; }
   const update = over.update ?? (pkg?.scripts?.update ? 'npm run update' : true);
+  // A port number means "anything answering on this port"; otherwise it's a URL.
+  const health = /^\d+$/.test(String(over.health ?? '')) ? `http://127.0.0.1:${over.health}/` : String(over.health || '');
   return {
-    name, dir, start: start || '', how: start ? how : '', env: over.env || {}, update,
+    name, dir, start: start || '', how: start ? how : '', env: over.env || {}, update, health, disabled: over.enabled === false,
     packages: Boolean(pkg && Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).length), // anything to npm install
     error: start ? '' : 'Can’t tell how to start it: add a "start" script to its package.json, a server.js / index.js, or a start command in settings.json.',
   };
@@ -149,7 +154,6 @@ function scan() {
       warned.add(entry.name);
       continue;
     }
-    if (over[entry.name]?.enabled === false) continue;
     servers.push(detect(entry.name, path.join(DEPLOY, entry.name), over[entry.name]));
   }
   return { checkEvery: Math.max(15, Number(settings.checkEvery) || 60), dashboardPort: Number(settings.dashboardPort) || 3399, servers };
@@ -165,6 +169,7 @@ const savePids = () => {
 async function startServer(s) {
   clearTimeout(s.retry);
   if (s.child || s.held || s.installing) return;
+  if (s.cfg.disabled) { s.status = 'disabled'; s.error = ''; return; } // turned off in settings.json
   if (s.cfg.error) { s.status = 'error'; s.error = s.cfg.error; return; } // tried again when the folder changes
   // Just deployed: its packages aren't installed yet.
   if (s.cfg.packages && !fs.existsSync(path.join(s.cfg.dir, 'node_modules'))) {
@@ -187,6 +192,8 @@ async function startServer(s) {
   s.status = 'running';
   s.error = '';
   s.startedAt = Date.now();
+  s.health = null;
+  s.healthFails = 0;
   s.log.line(`── starting: ${s.cfg.start} (in ${s.cfg.dir})`);
   const child = spawn(s.cfg.start, { cwd: s.cfg.dir, shell: true, windowsHide: true, env: { ...process.env, ...s.cfg.env } });
   s.child = child;
@@ -197,6 +204,8 @@ async function startServer(s) {
   child.on('exit', (code, signal) => {
     if (s.child !== child) return;
     s.child = null;
+    s.mem = s.cpu = null;
+    s.ports = [];
     savePids();
     const ranFor = Date.now() - s.startedAt;
     if (s.stopping) { s.stopping = false; s.status = s.held ? 'stopped' : s.status; return; }
@@ -225,13 +234,22 @@ function stopServer(s) {
 const restartServer = async (s) => { await stopServer(s); s.backoff = 0; startServer(s); };
 
 function addServer(cfg) {
-  const s = { cfg, log: logFile(cfg.name), child: null, status: 'starting', restarts: 0, backoff: 0, held: false, error: '', lastCheck: 0, lastUpdate: null, updating: false };
+  const s = { cfg, log: logFile(cfg.name), child: null, status: 'starting', restarts: 0, backoff: 0, held: false, error: '', lastCheck: 0, lastUpdate: null, updating: false,
+    repo: null, health: null, healthFails: 0, mem: null, cpu: null, ports: [], history: [] };
   servers.set(cfg.name, s);
   startServer(s);
 }
 
 // ---- updates ----
 const isRepo = (dir) => fs.existsSync(path.join(dir, '.git'));
+// Branch, commit and how far behind, for the dashboard.
+async function repoInfo(dir) {
+  const [branch, commit, behind] = await Promise.all([
+    git(dir, 'rev-parse', '--abbrev-ref', 'HEAD'), git(dir, 'log', '-1', '--format=%h %s'),
+    git(dir, 'rev-list', '--count', 'HEAD..@{u}').then(Number).catch(() => 0),
+  ]);
+  return { branch, commit, behind };
+}
 
 // Pulls new commits for one server and restarts it; the old version keeps serving while packages install.
 async function updateServer(s, { force = false } = {}) {
@@ -241,7 +259,8 @@ async function updateServer(s, { force = false } = {}) {
     const dir = s.cfg.dir;
     await git(dir, 'fetch', '--quiet');
     s.lastCheck = Date.now();
-    const behind = Number(await git(dir, 'rev-list', '--count', 'HEAD..@{u}'));
+    s.repo = await repoInfo(dir);
+    const behind = s.repo.behind;
     if (!behind && !force) return false;
     if (!behind) { s.log.line('── up to date'); return false; }
     const subject = await git(dir, 'log', '-1', '--format=%s', '@{u}');
@@ -268,6 +287,7 @@ async function updateServer(s, { force = false } = {}) {
     const fresh = detect(s.cfg.name, dir, (readSettings().servers || {})[s.cfg.name]);
     s.cfg = fresh;
     s.lastUpdate = { at: Date.now(), subject };
+    s.repo = await repoInfo(dir).catch(() => s.repo);
     s.status = 'running';
     if (!s.held) await restartServer(s);
     return true;
@@ -316,6 +336,100 @@ async function updateSelf() {
   }
 }
 
+// ---- health checks ----
+// For servers with a health check: any answer below 500 is healthy. Three misses in a row restart it
+// (not in its first minute, while it's still starting).
+const HEALTH_EVERY = 30_000;
+async function checkHealth(s) {
+  if (!s.cfg.health || !s.child || s.healthChecking || Date.now() - s.startedAt < 60_000) return;
+  s.healthChecking = true;
+  const child = s.child;
+  try {
+    const r = await fetch(s.cfg.health, { signal: AbortSignal.timeout(5000), redirect: 'manual' });
+    await r.body?.cancel();
+    if (r.status >= 500) throw new Error(`HTTP ${r.status}`);
+    s.health = { ok: true, at: Date.now(), code: r.status };
+    s.healthFails = 0;
+  } catch (err) {
+    if (s.child !== child) return; // restarted meanwhile
+    const why = err.name === 'TimeoutError' ? 'no answer in 5s' : err.cause?.code || err.message;
+    s.healthFails++;
+    s.health = { ok: false, at: Date.now(), error: why };
+    s.log.line(`── health check failed (${s.healthFails} of 3): ${s.cfg.health}: ${why}`);
+    if (s.healthFails >= 3) {
+      say(`${s.cfg.name}: not answering its health check (${why}); restarting it`);
+      s.restarts++;
+      await restartServer(s);
+    }
+  } finally {
+    s.healthChecking = false;
+  }
+}
+
+// ---- memory, CPU and ports ----
+// Each server is a few processes deep (cmd → npm → node), so add up its whole tree. It looks every 5s
+// while the dashboard is open, and every minute otherwise.
+let lastLook = 0; // when the dashboard last asked for the status
+let lastSample = 0;
+let sampling = false;
+let prevTimes = new Map(); // pid → CPU time (100 ns units) at the last sample
+const HISTORY = 60;
+async function sample() {
+  const running = [...servers.values()].filter((s) => s.child);
+  if (!running.length || sampling) return;
+  sampling = true;
+  try {
+    const [procs, net] = await Promise.all([
+      run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId),$($_.ParentProcessId),$($_.WorkingSetSize),$($_.UserModeTime + $_.KernelModeTime)" }'], here, { timeout: 30_000 }),
+      run('netstat', ['-ano'], here, { timeout: 30_000 }),
+    ]);
+    const now = Date.now();
+    const wall = now - lastSample;
+    const kids = new Map();
+    const info = new Map();
+    for (const line of procs.split(/\r?\n/)) {
+      const [pid, parent, mem, time] = line.split(',').map(Number);
+      if (!pid) continue;
+      info.set(pid, { mem, time });
+      if (parent !== pid) kids.set(parent, [...(kids.get(parent) || []), pid]);
+    }
+    // Listening sockets have a foreign address of 0.0.0.0:0 or [::]:0 (whatever the language's word for LISTENING).
+    const ports = new Map();
+    for (const m of net.matchAll(/^\s*TCP\s+\S+:(\d+)\s+(?:0\.0\.0\.0|\[::\]):0\s+\S+\s+(\d+)\s*$/gm)) {
+      ports.set(Number(m[2]), [...(ports.get(Number(m[2])) || []), Number(m[1])]);
+    }
+    const cpus = os.cpus().length || 1;
+    for (const s of running) {
+      const tree = new Set();
+      const walk = (pid) => { if (tree.has(pid)) return; tree.add(pid); (kids.get(pid) || []).forEach(walk); };
+      walk(s.child.pid);
+      let mem = 0;
+      let used = 0;
+      const open = new Set();
+      for (const pid of tree) {
+        const p = info.get(pid);
+        if (!p) continue;
+        mem += p.mem;
+        if (prevTimes.has(pid)) used += Math.max(0, p.time - prevTimes.get(pid));
+        (ports.get(pid) || []).forEach((port) => open.add(port));
+      }
+      s.mem = mem;
+      s.cpu = lastSample && wall > 0 ? Math.min(100, (used / (wall * 1e4 * cpus)) * 100) : null;
+      s.ports = [...open].sort((a, b) => a - b);
+      s.history.push([now, mem, s.cpu ?? 0]);
+      if (s.history.length > HISTORY) s.history.shift();
+    }
+    prevTimes = new Map([...info].map(([pid, p]) => [pid, p.time]));
+    lastSample = now;
+  } catch (err) {
+    if (!sample.failed) say(`Couldn't read memory and CPU use: ${(err.output || err.message).split('\n')[0]}`);
+    sample.failed = true;
+  } finally {
+    sampling = false;
+  }
+}
+
 // ---- deployment\ and settings.json changes ----
 // Every few seconds: start servers in new folders, stop ones whose folder went, restart ones whose
 // settings or start command changed.
@@ -324,20 +438,38 @@ function applyConfig() {
   try { next = scan(); } catch (err) { say(`Couldn't look in the deployment folder: ${err.message}`); return; }
   const names = new Set(next.servers.map((c) => c.name));
   for (const [name, s] of servers) {
-    if (!names.has(name)) { say(`${name}: its folder is gone (or it was turned off); stopping it`); s.held = true; stopServer(s); servers.delete(name); }
+    if (!names.has(name)) { say(`${name}: its folder is gone; stopping it`); s.held = true; stopServer(s); servers.delete(name); }
   }
   for (const cfg of next.servers) {
     const s = servers.get(cfg.name);
     if (!s) { say(`${cfg.name}: found in deployment\\${cfg.error ? ` (${cfg.error})` : `; ${cfg.how}`}`); addServer(cfg); }
     else if (!s.updating && !s.installing && JSON.stringify(s.cfg) !== JSON.stringify(cfg)) {
       s.cfg = cfg;
-      if (cfg.error) { stopServer(s); s.status = 'error'; s.error = cfg.error; continue; }
-      say(`${cfg.name}: how it runs changed (${cfg.how}); restarting it`);
+      if (cfg.error && !cfg.disabled) { stopServer(s); s.status = 'error'; s.error = cfg.error; continue; }
+      if (cfg.disabled !== (s.status === 'disabled')) { say(`${cfg.name}: turned ${cfg.disabled ? 'off' : 'on'} in settings.json`); s.held = false; }
+      else say(`${cfg.name}: how it runs changed (${cfg.how}); restarting it`);
       restartServer(s);
     }
   }
   if (config && next.dashboardPort !== config.dashboardPort) say('The dashboard port changes next time the supervisor starts.');
   config = { ...next, dashboardPort: config?.dashboardPort ?? next.dashboardPort };
+}
+
+// Changes settings.json for the dashboard (only while it has no mistake, so nothing is lost).
+function changeSettings(edit) {
+  if (settingsProblem) throw new Error('settings.json has a mistake. Fix it first (Settings).');
+  const settings = readJson(SETTINGS) || {};
+  edit(settings);
+  fs.writeFileSync(SETTINGS, `${JSON.stringify(settings, null, 2)}\n`);
+  applyConfig();
+}
+function checkSettings(text) {
+  const settings = JSON.parse(text);
+  const isObject = (o) => o && typeof o === 'object' && !Array.isArray(o);
+  if (!isObject(settings)) throw new Error('It should be one { … } object.');
+  if (settings.servers !== undefined && !isObject(settings.servers)) throw new Error('"servers" should be a { … } object, one entry per folder.');
+  for (const [name, o] of Object.entries(settings.servers || {})) if (!isObject(o)) throw new Error(`servers.${name} should be a { … } object.`);
+  if (settings.checkEvery !== undefined && !(Number(settings.checkEvery) > 0)) throw new Error('"checkEvery" should be a number of seconds.');
 }
 
 // Clones a repo into deployment\; the next scan finds it, installs its packages and starts it.
@@ -373,7 +505,8 @@ function statusJson() {
   return [...servers.values()].map((s) => ({
     name: s.cfg.name, dir: s.cfg.dir, start: s.cfg.start, how: s.cfg.how, status: s.held ? 'stopped' : s.status, pid: s.child?.pid || null,
     upSince: s.child ? s.startedAt : null, restarts: s.restarts, error: s.error, git: isRepo(s.cfg.dir) && s.cfg.update !== false,
-    lastCheck: s.lastCheck || null, lastUpdate: s.lastUpdate, updating: s.updating,
+    lastCheck: s.lastCheck || null, lastUpdate: s.lastUpdate, updating: s.updating, disabled: s.cfg.disabled, repo: s.repo,
+    healthUrl: s.cfg.health, health: s.health, mem: s.mem, cpu: s.cpu, ports: s.ports, history: s.history.map(([, mem]) => mem),
   }));
 }
 
@@ -388,12 +521,18 @@ function tail(file, bytes = 64 * 1024) {
   } catch { return ''; }
 }
 
+async function readBody(req, max) {
+  let body = '';
+  for await (const chunk of req) { body += chunk; if (body.length > max) throw new Error('Too long'); }
+  return body;
+}
+
 function startDashboard(port, key) {
   const page = fs.readFileSync(path.join(here, 'dashboard.html'), 'utf8');
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://x');
-    const send = (code, body, type = 'application/json') => {
-      res.writeHead(code, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer' });
+    const send = (code, body, type = 'application/json', headers = {}) => {
+      res.writeHead(code, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'Referrer-Policy': 'no-referrer', ...headers });
       res.end(typeof body === 'string' ? body : JSON.stringify(body));
     };
     // Only from this PC, by its own address (no other site's page can reach it under another name), and with the key.
@@ -402,9 +541,53 @@ function startDashboard(port, key) {
     const ok = given.length === key.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(key));
     if (!ok) return send(401, url.pathname === '/' ? '<p style="font:15px system-ui;padding:2em">Open the dashboard with <b>open-dashboard.bat</b> (it has the key).</p>' : { error: 'Missing key' }, url.pathname === '/' ? 'text/html' : 'application/json');
     if (req.method === 'GET' && url.pathname === '/') return send(200, page, 'text/html');
-    if (req.method === 'GET' && url.pathname === '/api/status') return send(200, { servers: statusJson(), checkEvery: config.checkEvery, since: started, host: process.env.COMPUTERNAME || '', deployDir: DEPLOY });
+    if (req.method === 'GET' && url.pathname === '/api/status') {
+      if (Date.now() - lastLook > 30_000) setTimeout(sample, 0); // the dashboard just opened: fresh numbers now
+      lastLook = Date.now();
+      return send(200, {
+        servers: statusJson(), checkEvery: config.checkEvery, since: started, host: process.env.COMPUTERNAME || '', deployDir: DEPLOY,
+        settingsProblem, memTotal: os.totalmem(), checking,
+      });
+    }
     const log = /^\/api\/log\/([\w.-]+)$/.exec(url.pathname);
-    if (req.method === 'GET' && log) return send(200, tail(path.join(LOGS, `${log[1]}.log`)), 'text/plain');
+    if (req.method === 'GET' && log) {
+      const file = path.join(LOGS, `${log[1]}.log`);
+      if (url.searchParams.get('all')) return send(200, tail(file, LOG_MAX * 2), 'text/plain', { 'Content-Disposition': `attachment; filename="${log[1]}.log"` });
+      return send(200, tail(file), 'text/plain');
+    }
+    if (req.method === 'GET' && url.pathname === '/api/settings') {
+      let text;
+      try { text = fs.readFileSync(SETTINGS, 'utf8'); } catch { text = '{\n  "servers": {}\n}\n'; }
+      return send(200, { text, problem: settingsProblem });
+    }
+    if (req.method === 'PUT' && url.pathname === '/api/settings') {
+      try {
+        const text = await readBody(req, 256 * 1024);
+        checkSettings(text);
+        fs.writeFileSync(SETTINGS, text.endsWith('\n') ? text : `${text}\n`);
+        say('settings.json changed (from the dashboard)');
+        applyConfig();
+        return send(200, { ok: true });
+      } catch (err) { return send(400, { error: err.message }); }
+    }
+    if (req.method === 'POST' && url.pathname === '/api/restart-all') {
+      say('Restarting every server (from the dashboard)');
+      for (const s of servers.values()) if (!s.held && !s.cfg.disabled) restartServer(s);
+      return send(200, { ok: true });
+    }
+    const turn = /^\/api\/(enable|disable)\/([\w.-]+)$/.exec(url.pathname);
+    if (req.method === 'POST' && turn) {
+      if (!servers.has(turn[2])) return send(404, { error: 'No such server' });
+      try {
+        changeSettings((settings) => {
+          const all = (settings.servers ??= {});
+          const o = (all[turn[2]] ??= {});
+          if (turn[1] === 'enable') delete o.enabled; else o.enabled = false;
+          if (!Object.keys(o).length) delete all[turn[2]];
+        });
+        return send(200, { ok: true });
+      } catch (err) { return send(400, { error: err.message }); }
+    }
     const act = /^\/api\/(restart|update|stop|start)\/([\w.-]+)$/.exec(url.pathname);
     if (req.method === 'POST' && act) {
       const s = servers.get(act[2]);
@@ -419,10 +602,8 @@ function startDashboard(port, key) {
     if (req.method === 'POST' && url.pathname === '/api/check') { checkAll(); return send(200, { ok: true }); }
     if (req.method === 'POST' && url.pathname === '/api/reload') { applyConfig(); return send(200, { ok: true }); }
     if (req.method === 'POST' && url.pathname === '/api/deploy') {
-      let body = '';
-      for await (const chunk of req) { body += chunk; if (body.length > 4096) return send(413, { error: 'Too long' }); }
       try {
-        const { url: repo, name } = JSON.parse(body || '{}');
+        const { url: repo, name } = JSON.parse((await readBody(req, 4096)) || '{}');
         return send(200, { ok: true, name: await deploy(repo, name) });
       } catch (err) { return send(400, { error: err.message }); }
     }
@@ -492,4 +673,7 @@ for (const cfg of config.servers) addServer(cfg);
 startDashboard(config.dashboardPort, dashboardKey());
 setInterval(applyConfig, 4000);
 setTimeout(checkAll, 5000);
-setInterval(checkAll, config.checkEvery * 1000);
+// Rescheduled each time, so a new checkEvery in settings.json applies without a restart.
+(function checkLater() { setTimeout(() => checkAll().finally(checkLater), config.checkEvery * 1000); })();
+setInterval(() => servers.forEach(checkHealth), HEALTH_EVERY);
+setInterval(() => { if (Date.now() - lastSample >= (Date.now() - lastLook < 30_000 ? 4500 : 60_000)) sample(); }, 5000);

@@ -17,7 +17,14 @@ C:\Servers\              (any folder you like)
 - **Keeps each server up to date.** If a server is a git repo, it checks for new commits every minute. When there are some, it runs the server's `update` script if `package.json` has one (Capri's also rebuilds its desktop app). Otherwise it pulls and runs `npm install` if packages changed. Then it restarts the server; the old version keeps serving while packages install.
 - **Updates itself** the same way from this repo.
 - **Logs** each server's output to `logs\<name>.log`, keeping the last 5 MB plus the previous file.
-- **Has a dashboard** at `http://127.0.0.1:3399`, on this PC only, behind a key. It shows each server's status, how it starts, uptime, restarts, last update and log; can restart, update, stop or start each one; and can **deploy a new server from GitHub** (clone, install, start).
+- **Restarts a server that hangs**, if you give it a health check (`servers.<folder>.health`): when it stops answering three times in a row, it's restarted.
+- **Has a dashboard** at `http://127.0.0.1:3399`, on this PC only, behind a key. It shows:
+  - each server's status, uptime, restarts, **memory** (with a small graph), **CPU**, the **ports** it listens on (click one to open it), its git branch and commit, and its health;
+  - totals at the top, a search box, and filters for running, problem and stopped servers. The tab's title shows how many servers need attention;
+  - each server's **log**, live, with errors and warnings in colour, a filter box, and a full download;
+  - the supervisor's own log under **Activity**.
+
+  From the dashboard you can restart, update, stop, start or **turn off** each server (turned-off servers stay off after restarts), restart them all, **edit `settings.json`** (it's checked before saving), and **deploy a new server from GitHub** (clone, install, start).
 
 It needs no packages, only Node.js and Git.
 
@@ -68,7 +75,8 @@ Everything works without it. Copy `settings.example.json` to `settings.json` to 
 | `servers.<folder>.start` | The command that starts it, instead of what's detected. |
 | `servers.<folder>.update` | `false` to never update it, or a command to update it with. |
 | `servers.<folder>.env` | Extra environment variables. |
-| `servers.<folder>.enabled` | `false` to leave it off. |
+| `servers.<folder>.health` | A port (`3300`) or URL (`http://127.0.0.1:3300/health`) checked every 30 seconds, starting a minute after it starts. Any answer below 500 counts as healthy; three misses in a row restart it. |
+| `servers.<folder>.enabled` | `false` to leave it off. It still shows on the dashboard, with a **Turn on** button. |
 
 Changes apply within a few seconds. If the file has a mistake, the last good settings stay in use (new folders are still picked up), and `logs\supervisor.log` says what's wrong. `settings.json`, `logs\` and the dashboard key never go into git, and your servers live outside this folder, so updates never touch them.
 
@@ -77,6 +85,8 @@ Changes apply within a few seconds. If the file has a mistake, the last good set
 - **`open-dashboard.bat`** opens the dashboard.
 - **Logs:** `logs\supervisor.log` (the supervisor) and `logs\<name>.log` (each server). The dashboard's **Log** button shows the latest lines live.
 - **Stop a server for a while:** its **Stop** button. It stays stopped until you start it again or the supervisor restarts.
+- **Turn a server off for good:** **⋯ → Turn off**. This sets `"enabled": false` in `settings.json`, so it stays off after restarts until you click **Turn on**.
+- **Change settings:** the dashboard's **Settings** button edits `settings.json`. It won't save broken JSON.
 - **Run it by hand instead** (to watch it): double-click `run.cmd`. Close the window to stop it. Don't do this while the service is running.
 - **The service itself** is the **Node servers** task in Task Scheduler. *End* stops it and *Run* starts it again; the next run tidies up anything the old one left running.
 

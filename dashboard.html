@@ -8,188 +8,563 @@
   :root {
     --bg: #f4f2ed; --card: #fff; --text: #191b26; --muted: #6b6d7a; --line: rgba(20, 22, 40, .1); --hover: rgba(20, 22, 40, .05);
     --accent: #5b5bd6; --green: #1f9d55; --red: #d64545; --amber: #c98a0b; --grey: #8a8c99; --mono: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+    --shadow: 0 1px 2px rgba(20, 22, 40, .05), 0 4px 14px rgba(20, 22, 40, .04);
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root { --bg: #0d0f17; --card: #161927; --text: #eceef6; --muted: #9093a6; --line: rgba(255, 255, 255, .09); --hover: rgba(255, 255, 255, .05);
-      --accent: #8b8bff; --green: #3ccf7a; --red: #ff6b6b; --amber: #f2b73f; --grey: #7c7f92; color-scheme: dark; }
+      --accent: #8b8bff; --green: #3ccf7a; --red: #ff6b6b; --amber: #f2b73f; --grey: #7c7f92; --shadow: none; color-scheme: dark; }
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 22px 28px 8px; max-width: 1100px; margin: 0 auto; }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 0 28px; }
+  header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 24px; padding-bottom: 6px; }
   header h1 { margin: 0; font-size: 21px; letter-spacing: -.01em; }
   header .sub { color: var(--muted); font-size: 13px; }
-  header .grow { flex: 1; }
-  main { max-width: 1100px; margin: 0 auto; padding: 10px 28px 40px; display: grid; gap: 12px; }
-  button { font: inherit; font-size: 13px; font-weight: 600; border: 1px solid var(--line); background: var(--card); color: var(--text);
-    padding: 7px 12px; border-radius: 10px; cursor: pointer; transition: background .15s, transform .1s; }
+  .grow { flex: 1; }
+  main { display: grid; gap: 14px; padding-top: 12px; padding-bottom: 48px; }
+
+  button, .btn { font: inherit; font-size: 13px; font-weight: 600; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    padding: 7px 12px; border-radius: 10px; cursor: pointer; transition: background .15s, transform .1s; white-space: nowrap; }
   button:hover { background: var(--hover); }
   button:active { transform: scale(.96); }
-  button:disabled { opacity: .5; cursor: default; }
+  button:disabled { opacity: .5; cursor: default; transform: none; }
   button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  button.primary:hover { background: color-mix(in srgb, var(--accent) 88%, #000); }
   button.danger { color: var(--red); }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; display: grid; gap: 10px; }
-  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  button.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+  button.ghost:hover { background: var(--hover); color: var(--text); }
+  button.small { padding: 4px 9px; font-size: 12px; border-radius: 8px; }
+  input, textarea { font: inherit; font-size: 13px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--card); color: var(--text); }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  code { font-family: var(--mono); font-size: 12px; background: var(--hover); padding: 1px 5px; border-radius: 5px; }
+
+  .banner { border-radius: 14px; padding: 11px 16px; font-weight: 600; font-size: 13px; color: var(--red);
+    background: color-mix(in srgb, var(--red) 10%, var(--card)); border: 1px solid color-mix(in srgb, var(--red) 30%, transparent); }
+  .banner button { margin-left: 8px; }
+
+  /* Totals */
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+  .tile { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .tile .label { color: var(--muted); font-size: 12px; font-weight: 600; }
+  .tile .value { font-size: 24px; font-weight: 750; letter-spacing: -.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .tile .value small { font-size: 13px; color: var(--muted); font-weight: 600; letter-spacing: 0; }
+  .tile.bad .value { color: var(--red); }
+  .tile.good .value { color: var(--green); }
+  .bar { height: 5px; border-radius: 9px; background: var(--hover); margin-top: 8px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--accent); border-radius: 9px; transition: width .4s; }
+
+  /* Search and filters */
+  .toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .toolbar input { flex: 1; min-width: 160px; max-width: 320px; }
+  .seg { display: inline-flex; background: var(--card); border: 1px solid var(--line); border-radius: 11px; padding: 3px; gap: 2px; flex-wrap: wrap; }
+  .seg button { border: 0; background: transparent; padding: 5px 11px; border-radius: 8px; color: var(--muted); }
+  .seg button.on { background: var(--hover); color: var(--text); }
+  .seg .n { color: var(--muted); font-weight: 500; margin-left: 3px; }
+
+  /* Server cards */
+  #list { display: grid; gap: 12px; }
+  .card { --c: var(--grey); background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow), inset 3px 0 0 var(--c); overflow: hidden; }
+  .card .body { padding: 15px 18px 14px; display: grid; gap: 11px; }
+  .st-running { --c: var(--green); } .st-crashed, .st-error, .st-unhealthy { --c: var(--red); }
+  .st-updating, .st-starting, .st-installing { --c: var(--amber); }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .name { font-size: 16px; font-weight: 700; }
   .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; text-transform: capitalize; }
   .pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
   .running { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
   .running::before { animation: pulse 2s infinite; }
-  .crashed, .error { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+  .crashed, .error, .unhealthy { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
   .updating, .starting, .installing { color: var(--amber); background: color-mix(in srgb, var(--amber) 16%, transparent); }
-  .stopped { color: var(--grey); background: color-mix(in srgb, var(--grey) 16%, transparent); }
-  @keyframes pulse { 50% { opacity: .35; } }
-  .meta { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
-  .meta b { color: var(--text); font-weight: 600; }
+  .updating::before, .starting::before, .installing::before { animation: pulse 1s infinite; }
+  .stopped, .disabled { color: var(--grey); background: color-mix(in srgb, var(--grey) 16%, transparent); }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: var(--muted); border: 1px solid var(--line);
+    border-radius: 8px; padding: 2px 8px; text-decoration: none; font-family: var(--mono); }
+  a.chip:hover { color: var(--accent); border-color: var(--accent); }
+  .chip.ok { color: var(--green); } .chip.bad { color: var(--red); } .chip.warn { color: var(--amber); }
+  .actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .metrics { display: flex; gap: 8px 26px; flex-wrap: wrap; }
+  .metric { display: grid; gap: 1px; min-width: 64px; }
+  .metric .label { color: var(--muted); font-size: 11.5px; font-weight: 600; }
+  .metric .value { font-weight: 650; font-variant-numeric: tabular-nums; display: flex; align-items: center; gap: 8px; }
+  .metric .value.dim { color: var(--muted); font-weight: 500; }
+  .spark { color: var(--accent); display: block; }
   .cmd { font-family: var(--mono); font-size: 12px; color: var(--muted); word-break: break-all; }
-  .err { color: var(--red); font-size: 12.5px; }
-  .actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
-  .empty { text-align: center; color: var(--muted); padding: 50px 20px; }
-  .log { display: none; margin: 0; max-height: 420px; overflow: auto; background: #0b0d14; color: #d7dae6; border-radius: 12px;
-    padding: 12px 14px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
-  .card.open .log { display: block; }
-  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px;
-    border-radius: 12px; font-size: 13px; font-weight: 600; opacity: 0; transition: opacity .2s; pointer-events: none; }
-  .toast.on { opacity: 1; }
-  .offline { color: var(--red); font-weight: 600; }
-  .deploy { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-  .deploy input { flex: 1; min-width: 180px; font: inherit; font-size: 13px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
-  .deploy input.short { flex: 0 1 170px; }
-  .deploy input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .err { color: var(--red); font-size: 12.5px; background: color-mix(in srgb, var(--red) 8%, transparent); border-radius: 10px; padding: 7px 11px; }
+
+  /* "More" menu */
+  .more { position: relative; }
+  .more summary { list-style: none; cursor: pointer; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); font-weight: 700; line-height: 1.2; user-select: none; }
+  .more summary::-webkit-details-marker { display: none; }
+  .more summary:hover { background: var(--hover); }
+  .more .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 5px; min-width: 200px; display: grid; box-shadow: 0 10px 30px rgba(0, 0, 0, .18); }
+  .more .menu button { border: 0; background: transparent; text-align: left; font-weight: 500; border-radius: 8px; }
+  .more .menu button:hover { background: var(--hover); }
+
+  /* Logs */
+  .logbox { border-top: 1px solid var(--line); background: color-mix(in srgb, var(--hover) 60%, transparent); padding: 10px 14px 14px; display: grid; gap: 8px; }
+  .logbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+  .logbar input[type=search] { flex: 1; min-width: 140px; max-width: 280px; padding: 5px 10px; font-size: 12.5px; }
+  .logbar label { display: inline-flex; gap: 5px; align-items: center; cursor: pointer; user-select: none; }
+  .log { margin: 0; height: 380px; overflow: auto; resize: vertical; background: #0b0d14; color: #d7dae6; border-radius: 12px;
+    padding: 12px 14px; font: 12px/1.55 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .log.nowrap { white-space: pre; }
+  .log .ts { color: #6b7088; }
+  .log .e { color: #ff8a8a; } .log .w { color: #f2c66d; } .log .sys { color: #9d9dff; font-weight: 600; }
+  .log mark { background: #5b5bd6; color: #fff; border-radius: 3px; }
+
+  .empty { text-align: center; color: var(--muted); padding: 50px 20px; background: var(--card); border: 1px dashed var(--line); border-radius: 16px; }
+  .activity { background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow); }
+  .activity summary { cursor: pointer; padding: 13px 18px; font-weight: 700; user-select: none; }
+  .activity .log { margin: 0 14px 14px; height: 260px; }
+
+  /* Dialogs */
+  dialog { border: 1px solid var(--line); border-radius: 18px; background: var(--card); color: var(--text); padding: 0; width: min(640px, calc(100vw - 32px)); box-shadow: 0 20px 60px rgba(0, 0, 0, .3); }
+  dialog::backdrop { background: rgba(10, 12, 20, .45); backdrop-filter: blur(2px); }
+  dialog form { display: grid; gap: 12px; padding: 20px 22px; }
+  dialog h2 { margin: 0; font-size: 17px; }
+  dialog .foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; flex-wrap: wrap; }
+  dialog .foot .grow { min-width: 0; }
+  dialog.wide { width: min(860px, calc(100vw - 32px)); }
+  #settingsText { width: 100%; height: 340px; font: 12.5px/1.5 var(--mono); resize: vertical; tab-size: 2; white-space: pre; }
+  .check { font-size: 12.5px; font-weight: 600; }
+  .check.ok { color: var(--green); } .check.bad { color: var(--red); }
   .hint { color: var(--muted); font-size: 12.5px; }
-  .hint code, .empty code { font-family: var(--mono); font-size: 12px; background: var(--hover); padding: 1px 5px; border-radius: 5px; }
-  .how { color: var(--muted); font-size: 12px; }
-  @media (max-width: 600px) { header, main { padding-left: 14px; padding-right: 14px; } .actions { margin-left: 0; } }
+  .help { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 12.5px; color: var(--muted); }
+  .help code { white-space: nowrap; }
+
+  .toasts { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); display: grid; gap: 8px; justify-items: center; z-index: 20; width: max-content; max-width: calc(100vw - 32px); }
+  .toast { background: var(--text); color: var(--bg); padding: 9px 16px; border-radius: 12px; font-size: 13px; font-weight: 600; animation: rise .2s ease-out; }
+  .toast.bad { background: var(--red); color: #fff; }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+
+  @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 600px) {
+    .wrap { padding: 0 16px; }
+    .actions { margin-left: 0; width: 100%; }
+    .toolbar input { max-width: none; }
+    .tile .value { font-size: 20px; }
+  }
 </style>
 </head>
 <body>
-<header>
+<header class="wrap">
   <div><h1>Node servers</h1><div class="sub" id="sub">Loading…</div></div>
   <div class="grow"></div>
-  <button id="check" title="Look for new commits on every server now">Check for updates</button>
-  <button id="reload" title="Look at the deployment folder and settings.json now (it also does every few seconds)">Rescan</button>
+  <button class="ghost" id="check" title="Look for new commits on every server now">Check for updates</button>
+  <button class="ghost" id="restartAll" title="Restart every server that's on">Restart all</button>
+  <button class="ghost" id="settings" title="Edit settings.json">Settings</button>
+  <button class="ghost" id="reload" title="Look at the deployment folder and settings.json now (it also does every few seconds)">Rescan</button>
+  <button class="primary" id="deploy">+ Deploy</button>
 </header>
-<main>
-  <section class="card">
-    <div class="row"><span class="name" style="font-size:15px">Deploy from GitHub</span><span class="hint" id="where"></span></div>
-    <form class="deploy" id="deploy">
-      <input id="repo" placeholder="https://github.com/you/your-server" autocomplete="off" spellcheck="false" required>
-      <input id="folder" class="short" placeholder="Folder name (optional)" autocomplete="off" spellcheck="false">
-      <button class="primary" id="go">Deploy</button>
-    </form>
-    <div class="hint">Clones it into the deployment folder, installs its packages and starts it. Or just put a folder there yourself: it's picked up within a few seconds.</div>
+<main class="wrap">
+  <div class="banner" id="banner" hidden></div>
+  <section class="tiles">
+    <div class="tile" id="tRunning"><div class="label">Running</div><div class="value">—</div></div>
+    <div class="tile" id="tProblems"><div class="label">Need attention</div><div class="value">—</div></div>
+    <div class="tile" id="tMem"><div class="label">Memory</div><div class="value">—</div><div class="bar"><i style="width:0"></i></div></div>
+    <div class="tile" id="tUp"><div class="label">Supervisor up</div><div class="value">—</div></div>
   </section>
-  <div id="list" style="display:grid;gap:12px"></div>
+  <div class="toolbar">
+    <input type="search" id="search" placeholder="Search servers  ( / )" autocomplete="off" spellcheck="false">
+    <div class="seg" id="filters">
+      <button data-f="all" class="on">All<span class="n"></span></button>
+      <button data-f="running">Running<span class="n"></span></button>
+      <button data-f="problems">Problems<span class="n"></span></button>
+      <button data-f="off">Stopped<span class="n"></span></button>
+    </div>
+  </div>
+  <div id="list"></div>
+  <div class="empty" id="empty" hidden></div>
+  <details class="activity" id="activity">
+    <summary>Activity <span class="hint">(the supervisor's log)</span></summary>
+    <pre class="log"></pre>
+  </details>
 </main>
-<div class="toast" id="toast"></div>
+
+<dialog id="deployDlg">
+  <form id="deployForm">
+    <h2>Deploy from GitHub</h2>
+    <input id="repo" placeholder="https://github.com/you/your-server" autocomplete="off" spellcheck="false" required>
+    <input id="folder" placeholder="Folder name (optional, taken from the address)" autocomplete="off" spellcheck="false">
+    <div class="hint">Clones it into <code id="where"></code>, installs its packages and starts it. Or put a folder there yourself: it's picked up within a few seconds.</div>
+    <div class="foot"><button type="button" data-close>Cancel</button><button class="primary" id="go">Deploy</button></div>
+  </form>
+</dialog>
+
+<dialog id="settingsDlg" class="wide">
+  <form id="settingsForm">
+    <h2>settings.json</h2>
+    <textarea id="settingsText" spellcheck="false"></textarea>
+    <div class="help">
+      <code>checkEvery</code><span>Seconds between checks for new commits (at least 15).</span>
+      <code>dashboardPort</code><span>This dashboard's port (applies when the supervisor next starts).</span>
+      <code>deployment</code><span>Where the servers are, if not <code>..\deployment</code> (applies when the supervisor next starts).</span>
+      <code>servers.&lt;folder&gt;.start</code><span>The command that starts it, instead of what's detected.</span>
+      <code>servers.&lt;folder&gt;.update</code><span><code>false</code> to never update it, or a command to update it with.</span>
+      <code>servers.&lt;folder&gt;.env</code><span>Extra environment variables, like <code>{ "PORT": "3300" }</code>.</span>
+      <code>servers.&lt;folder&gt;.health</code><span>A port or URL to check every 30s; three misses in a row restart it.</span>
+      <code>servers.&lt;folder&gt;.enabled</code><span><code>false</code> to leave it off.</span>
+    </div>
+    <div class="foot"><span class="check" id="settingsCheck"></span><span class="grow"></span><button type="button" data-close>Cancel</button><button class="primary" id="saveSettings">Save <span class="hint" style="color:inherit;opacity:.7">Ctrl+S</span></button></div>
+  </form>
+</dialog>
+
+<div class="toasts" id="toasts"></div>
 <script>
   // The key arrives in the address (from open-dashboard.bat); keep it for this tab and take it out of the address bar.
   const params = new URLSearchParams(location.search);
   if (params.get('key')) { sessionStorage.setItem('key', params.get('key')); history.replaceState(null, '', location.pathname); }
   const key = sessionStorage.getItem('key') || '';
-  const api = (path, method = 'GET') => fetch(path, { method, headers: { 'X-Key': key } }).then((r) => {
-    if (!r.ok) throw new Error(r.status === 401 ? 'Open this with open-dashboard.bat' : `HTTP ${r.status}`);
-    return (r.headers.get('content-type') || '').includes('json') ? r.json() : r.text();
-  });
+  async function api(path, { method = 'GET', body } = {}) {
+    const r = await fetch(path, { method, headers: { 'X-Key': key, ...(body ? { 'Content-Type': 'application/json' } : {}) }, body });
+    const data = (r.headers.get('content-type') || '').includes('json') ? await r.json() : await r.text();
+    if (!r.ok) throw new Error(r.status === 401 ? 'Open this with open-dashboard.bat' : data.error || `HTTP ${r.status}`);
+    return data;
+  }
   const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => [...el.querySelectorAll(s)];
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const ago = (t) => {
-    if (!t) return 'never';
-    const s = Math.round((Date.now() - t) / 1000);
-    if (s < 60) return `${s}s ago`;
-    if (s < 3600) return `${Math.round(s / 60)}m ago`;
-    if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m ago`;
-    return `${Math.floor(s / 86400)}d ago`;
-  };
-  const since = (t) => (t ? ago(t).replace(' ago', '') : '—');
-  let toastTimer;
-  function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 2600); }
+  const store = { get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(k, v); } catch { /* private window */ } } };
 
-  const open = new Set(); // servers whose log is showing
-  function card(s) {
-    const status = s.updating ? 'updating' : s.status;
-    return `<section class="card ${open.has(s.name) ? 'open' : ''}" data-name="${esc(s.name)}">
+  const dur = (ms) => {
+    const s = Math.max(0, Math.round(ms / 1000));
+    if (s < 60) return `${s}s`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+    return `${Math.floor(s / 86400)}d ${Math.floor((s % 86400) / 3600)}h`;
+  };
+  const ago = (t) => (t ? `${dur(Date.now() - t).split(' ')[0]} ago` : 'never');
+  const bytes = (b) => (b == null ? '—' : b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.round(b / 1024 ** 2)} MB`);
+  // Times as attributes, so they tick every second without redrawing the cards.
+  const since = (t) => `<span data-since="${t}">${dur(Date.now() - t)}</span>`;
+  const agoTag = (t) => (t ? `<span data-ago="${t}">${ago(t)}</span>` : 'never');
+  function tick() {
+    for (const el of $$('[data-since]')) el.textContent = dur(Date.now() - Number(el.dataset.since));
+    for (const el of $$('[data-ago]')) el.textContent = ago(Number(el.dataset.ago));
+  }
+
+  function toast(msg, bad = false) {
+    const t = document.createElement('div');
+    t.className = `toast${bad ? ' bad' : ''}`;
+    t.textContent = msg;
+    $('#toasts').append(t);
+    setTimeout(() => t.remove(), bad ? 6000 : 2800);
+  }
+
+  function spark(values) {
+    if (values.length < 2) return '';
+    const w = 64, h = 20, max = Math.max(...values), min = Math.min(...values), span = max - min || 1;
+    const pts = values.map((v, i) => `${((i / (values.length - 1)) * w).toFixed(1)},${(h - 2 - ((v - min) / span) * (h - 4)).toFixed(1)}`);
+    return `<svg class="spark" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true">
+      <polygon points="0,${h} ${pts.join(' ')} ${w},${h}" fill="currentColor" opacity=".12"/>
+      <polyline points="${pts.join(' ')}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  }
+
+  // What a server is doing, folding in its health check.
+  const stateOf = (s) => (s.updating ? 'updating' : s.status === 'running' && s.health && !s.health.ok ? 'unhealthy' : s.status);
+  const isProblem = (s) => ['crashed', 'error', 'unhealthy'].includes(stateOf(s));
+  const isOff = (s) => ['stopped', 'disabled'].includes(s.status);
+
+  function cardBody(s) {
+    const state = stateOf(s);
+    const off = isOff(s);
+    const chips = [
+      ...s.ports.map((p) => `<a class="chip" href="http://localhost:${p}" target="_blank" rel="noreferrer" title="Open http://localhost:${p}">:${p} ↗</a>`),
+      s.repo ? `<span class="chip${s.repo.behind ? ' warn' : ''}" title="${esc(s.repo.commit)}">⎇ ${esc(s.repo.branch)} · ${esc(s.repo.commit.split(' ')[0])}${s.repo.behind ? ` · ${s.repo.behind} behind` : ''}</span>` : '',
+      s.healthUrl ? `<span class="chip ${s.health ? (s.health.ok ? 'ok' : 'bad') : ''}" title="Health check: ${esc(s.healthUrl)}${s.health?.error ? ` (${esc(s.health.error)})` : ''}">${s.health ? (s.health.ok ? '♥ healthy' : '♥ not answering') : '♥ waiting'}</span>` : '',
+    ].join('');
+    const main = s.status === 'disabled' ? `<button class="primary" data-do="enable">Turn on</button>`
+      : s.status === 'stopped' ? `<button class="primary" data-do="start">Start</button>`
+      : `<button data-do="restart">Restart</button>`;
+    return `
       <div class="row">
-        <span class="name">${esc(s.name)}</span><span class="pill ${esc(status)}">${esc(status)}</span>
+        <span class="name">${esc(s.name)}</span><span class="pill ${esc(state)}">${esc(state)}</span>${chips}
         <div class="actions">
-          ${s.status === 'stopped' ? `<button class="primary" data-do="start">Start</button>` : `<button data-do="restart">Restart</button>`}
-          ${s.git ? `<button data-do="update" ${s.updating ? 'disabled' : ''}>Update now</button>` : ''}
-          ${s.status !== 'stopped' ? `<button class="danger" data-do="stop">Stop</button>` : ''}
+          ${main}
+          ${s.git ? `<button data-do="update" ${s.updating ? 'disabled' : ''}>${s.updating ? 'Updating…' : 'Update'}</button>` : ''}
+          ${!off ? `<button class="danger" data-do="stop">Stop</button>` : ''}
           <button data-do="log">${open.has(s.name) ? 'Hide log' : 'Log'}</button>
+          <details class="more"><summary title="More">⋯</summary><div class="menu">
+            ${s.status !== 'disabled' ? `<button data-do="disable">Turn off (stays off after restarts)</button>` : ''}
+            <button data-do="download">Download full log</button>
+            <button data-do="copy">Copy folder path</button>
+          </div></details>
         </div>
       </div>
-      <div class="meta">
-        <span>Up <b>${s.upSince ? since(s.upSince) : '—'}</b></span>
-        <span>Restarts <b>${s.restarts}</b></span>
-        ${s.pid ? `<span>PID <b>${s.pid}</b></span>` : ''}
-        ${s.git ? `<span>Checked <b>${ago(s.lastCheck)}</b></span><span>Updated <b>${s.lastUpdate ? `${ago(s.lastUpdate.at)}: ${esc(s.lastUpdate.subject.slice(0, 70))}` : 'not since starting'}</b></span>` : '<span>Not a git repo: no auto-update</span>'}
-      </div>
-      <div class="cmd">${s.start ? esc(s.start) : 'no start command'} · ${esc(s.dir)}</div>
-      ${s.how && s.how !== s.start ? `<div class="how">How it starts: ${esc(s.how)}</div>` : ''}
-      ${s.error ? `<div class="err">${esc(s.error)}</div>` : ''}
-      <pre class="log"></pre>
-    </section>`;
+      ${off ? '' : `<div class="metrics">
+        <div class="metric"><span class="label">Uptime</span><span class="value">${s.upSince ? since(s.upSince) : '—'}</span></div>
+        <div class="metric"><span class="label">Memory</span><span class="value">${bytes(s.mem)}${spark(s.history)}</span></div>
+        <div class="metric"><span class="label">CPU</span><span class="value">${s.cpu == null ? '—' : `${s.cpu < 10 ? s.cpu.toFixed(1) : Math.round(s.cpu)}%`}</span></div>
+        <div class="metric"><span class="label">Restarts</span><span class="value${s.restarts ? '' : ' dim'}">${s.restarts}</span></div>
+        ${s.pid ? `<div class="metric"><span class="label">PID</span><span class="value dim">${s.pid}</span></div>` : ''}
+        ${s.git ? `<div class="metric"><span class="label">Checked</span><span class="value dim">${agoTag(s.lastCheck)}</span></div>
+          <div class="metric"><span class="label">Last update</span><span class="value dim" title="${esc(s.lastUpdate?.subject)}">${s.lastUpdate ? `${agoTag(s.lastUpdate.at)}: ${esc(s.lastUpdate.subject.slice(0, 50))}` : 'not since starting'}</span></div>`
+          : `<div class="metric"><span class="label">Updates</span><span class="value dim">${s.status === 'disabled' ? 'off' : 'not a git repo'}</span></div>`}
+      </div>`}
+      <div class="cmd">${s.start ? esc(s.start) : 'no start command'}${s.how && s.how !== s.start ? ` · ${esc(s.how)}` : ''} · ${esc(s.dir)}</div>
+      ${s.status === 'disabled' ? `<div class="hint">Turned off in settings.json. It won't start until it's turned on.</div>` : ''}
+      ${s.error ? `<div class="err">${esc(s.error)}</div>` : ''}`;
+  }
+
+  // ---- logs ----
+  const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
+  function paintLog(pre, text, filter = '') {
+    const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 30;
+    let lines = text.replace(ANSI, '').replace(/\n$/, '').split('\n');
+    const f = filter.trim().toLowerCase();
+    if (f) lines = lines.filter((l) => l.toLowerCase().includes(f));
+    const mark = f ? new RegExp(esc(f).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi') : null;
+    pre.innerHTML = lines.length && text ? lines.map((l) => {
+      const m = /^(\[[^\]]{6,24}\] )?(.*)$/.exec(l);
+      const rest = m[2];
+      const cls = rest.startsWith('──') ? 'sys' : /\b(error|err!|failed|fail|exception|fatal|uncaught|crash(ed)?|ECONN\w+|EADDRINUSE)\b/i.test(rest) ? 'e' : /\bwarn(ing)?\b/i.test(rest) ? 'w' : '';
+      let body = esc(rest);
+      if (mark) body = body.replace(mark, (x) => `<mark>${x}</mark>`); // matched on the escaped text
+      return `${m[1] ? `<span class="ts">${esc(m[1])}</span>` : ''}${cls ? `<span class="${cls}">${body}</span>` : body}`;
+    }).join('\n') : `<span class="ts">${f ? 'No lines match.' : '(nothing logged yet)'}</span>`;
+    if (pre.dataset.follow !== 'off' && (atEnd || !pre.dataset.painted)) pre.scrollTop = pre.scrollHeight;
+    pre.dataset.painted = '1';
+  }
+  async function loadLog(name) {
+    const c = cards.get(name);
+    if (!c) return;
+    c.logText = await api(`/api/log/${encodeURIComponent(name)}`).catch(() => c.logText || '');
+    paintLog($('.log', c.el), c.logText, $('.logbar input[type=search]', c.el).value);
+  }
+  async function download(name) {
+    try {
+      const r = await fetch(`/api/log/${encodeURIComponent(name)}?all=1`, { headers: { 'X-Key': key } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(await r.blob()), download: `${name}.log` });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (err) { toast(err.message, true); }
+  }
+
+  // ---- the list ----
+  const open = new Set(); // servers whose log is showing
+  const cards = new Map(); // name → { el, body, html, logText }
+  const last = new Map(); // name → state at the last refresh, to notice crashes
+  let filter = store.get('filter', 'all');
+  let latest = null;
+  const matches = (s) => {
+    const q = $('#search').value.trim().toLowerCase();
+    if (q && !`${s.name} ${s.dir} ${s.ports.join(' ')} ${s.repo?.branch || ''}`.toLowerCase().includes(q)) return false;
+    return filter === 'all' || (filter === 'running' && s.status === 'running') || (filter === 'problems' && isProblem(s)) || (filter === 'off' && isOff(s));
+  };
+
+  function newCard(name) {
+    const el = document.createElement('section');
+    el.dataset.name = name;
+    el.innerHTML = `<div class="body"></div>
+      <div class="logbox" hidden>
+        <div class="logbar">
+          <input type="search" placeholder="Filter the log" spellcheck="false">
+          <label><input type="checkbox" data-opt="follow" checked> Follow</label>
+          <label><input type="checkbox" data-opt="wrap" checked> Wrap</label>
+          <span class="grow"></span>
+          <button class="small" data-do="download">Download</button>
+        </div>
+        <pre class="log"></pre>
+      </div>`;
+    const c = { el, body: $('.body', el), html: '', logText: '' };
+    $('.logbar input[type=search]', el).addEventListener('input', (e) => paintLog($('.log', el), c.logText, e.target.value));
+    el.addEventListener('change', (e) => {
+      const opt = e.target.dataset.opt;
+      if (opt === 'follow') { $('.log', el).dataset.follow = e.target.checked ? 'on' : 'off'; if (e.target.checked) $('.log', el).scrollTop = 1e9; }
+      if (opt === 'wrap') $('.log', el).classList.toggle('nowrap', !e.target.checked);
+    });
+    cards.set(name, c);
+    return c;
+  }
+
+  function render(data) {
+    const list = $('#list');
+    const seen = new Set();
+    let i = 0;
+    for (const s of data.servers) {
+      seen.add(s.name);
+      const c = cards.get(s.name) || newCard(s.name);
+      const html = cardBody(s);
+      if (html !== c.html) {
+        const menuOpen = $('details.more', c.body)?.open;
+        c.body.innerHTML = html;
+        c.html = html;
+        if (menuOpen) $('details.more', c.body).open = true;
+      }
+      c.el.className = `card st-${stateOf(s)}`;
+      $('.logbox', c.el).hidden = !open.has(s.name);
+      c.el.hidden = !matches(s);
+      if (list.children[i] !== c.el) list.insertBefore(c.el, list.children[i] || null);
+      i++;
+    }
+    for (const [name, c] of cards) if (!seen.has(name)) { c.el.remove(); cards.delete(name); open.delete(name); }
+
+    const shown = data.servers.filter(matches).length;
+    $('#empty').hidden = shown > 0;
+    $('#empty').innerHTML = data.servers.length
+      ? 'No servers match.'
+      : `No servers yet. Put each server's folder in <code>${esc(data.deployDir)}</code>, or <button class="primary small" data-open="deploy">Deploy one from GitHub</button>`;
+    const counts = { all: data.servers.length, running: data.servers.filter((s) => s.status === 'running').length, problems: data.servers.filter(isProblem).length, off: data.servers.filter(isOff).length };
+    for (const b of $$('#filters button')) { b.classList.toggle('on', b.dataset.f === filter); $('.n', b).textContent = counts[b.dataset.f]; }
   }
 
   async function refresh() {
-    try {
-      const data = await api('/api/status');
-      const n = data.servers.length;
-      const up = data.servers.filter((s) => s.status === 'running').length;
-      $('#sub').innerHTML = `${esc(data.host ? `${data.host} · ` : '')}${up} of ${n} running · supervisor up ${since(data.since)} · checks GitHub every ${data.checkEvery}s`;
-      const logs = new Map([...document.querySelectorAll('.card.open')].map((c) => [c.dataset.name, $('.log', c)]));
-      $('#where').innerHTML = `→ <code>${esc(data.deployDir)}</code>`;
-      $('#list').innerHTML = n ? data.servers.map(card).join('') : `<div class="card empty">No servers yet. Put each server's folder in <code>${esc(data.deployDir)}</code>, or deploy one from GitHub above.</div>`;
-      for (const [name, old] of logs) { const pre = $(`.card[data-name="${CSS.escape(name)}"] .log`); if (pre) { pre.textContent = old.textContent; pre.scrollTop = old.scrollTop; } }
-      for (const name of open) loadLog(name);
-    } catch (err) {
-      $('#sub').innerHTML = `<span class="offline">${esc(err.message === 'Failed to fetch' ? 'The supervisor isn’t answering. Is it running?' : err.message)}</span>`;
+    let data;
+    try { data = await api('/api/status'); } catch (err) {
+      $('#banner').hidden = false;
+      $('#banner').textContent = err.message === 'Failed to fetch' ? 'The supervisor isn’t answering. Is it running? (This page keeps trying.)' : err.message;
+      document.title = '⚠ Node servers';
+      return;
     }
+    latest = data;
+    const n = data.servers.length;
+    const on = data.servers.filter((s) => s.status !== 'disabled').length;
+    const up = data.servers.filter((s) => s.status === 'running').length;
+    const bad = data.servers.filter(isProblem);
+    const mem = data.servers.reduce((t, s) => t + (s.mem || 0), 0);
+
+    $('#banner').hidden = !data.settingsProblem;
+    if (data.settingsProblem) $('#banner').innerHTML = `${esc(data.settingsProblem)} <button class="small" data-open="settings">Fix it</button>`;
+    $('#sub').textContent = `${data.host ? `${data.host} · ` : ''}${n} server${n === 1 ? '' : 's'} · checks for updates every ${data.checkEvery}s`;
+    $('#where').textContent = data.deployDir;
+    $('#check').disabled = data.checking;
+    $('#check').textContent = data.checking ? 'Checking…' : 'Check for updates';
+
+    $('#tRunning .value').innerHTML = `${up}<small> / ${on}</small>`;
+    $('#tRunning').className = `tile${on && up === on ? ' good' : ''}`;
+    $('#tProblems .value').innerHTML = bad.length ? `${bad.length}<small> ${esc(bad.map((s) => s.name).join(', ').slice(0, 40))}</small>` : '0<small> all good</small>';
+    $('#tProblems').className = `tile${bad.length ? ' bad' : ''}`;
+    $('#tMem .value').innerHTML = `${mem ? bytes(mem) : '—'}<small> of ${bytes(data.memTotal)}</small>`;
+    $('#tMem .bar i').style.width = `${Math.min(100, (mem / data.memTotal) * 100)}%`;
+    $('#tUp .value').innerHTML = since(data.since);
+    document.title = bad.length ? `(${bad.length}) Node servers` : 'Node servers';
+
+    // Say when something falls over while the page is open.
+    for (const s of data.servers) {
+      const was = last.get(s.name), now = stateOf(s);
+      if (was && was !== now && ['crashed', 'unhealthy'].includes(now)) toast(`${s.name} ${now === 'crashed' ? 'crashed' : 'stopped answering its health check'}`, true);
+      last.set(s.name, now);
+    }
+
+    render(data);
+    for (const name of open) loadLog(name);
+    if ($('#activity').open) api('/api/log/supervisor').then((t) => paintLog($('#activity .log'), t)).catch(() => {});
   }
 
-  async function loadLog(name) {
-    const pre = $(`.card[data-name="${CSS.escape(name)}"] .log`);
-    if (!pre) return;
-    const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 30 || !pre.textContent;
-    pre.textContent = (await api(`/api/log/${encodeURIComponent(name)}`).catch(() => '')) || '(nothing logged yet)';
-    if (atEnd) pre.scrollTop = pre.scrollHeight;
-  }
-
+  // ---- actions ----
+  const done = { stop: 'stopped', start: 'started', restart: 'restarted', enable: 'turned on', disable: 'turned off' };
   document.addEventListener('click', async (e) => {
+    const opener = e.target.closest('[data-open]');
+    if (opener) return opener.dataset.open === 'deploy' ? openDeploy() : openSettings();
+    for (const d of $$('details.more[open]')) if (!d.contains(e.target)) d.open = false;
     const b = e.target.closest('[data-do]');
     if (!b) return;
     const name = b.closest('.card').dataset.name;
     const what = b.dataset.do;
-    if (what === 'log') { open.has(name) ? open.delete(name) : open.add(name); return refresh(); }
+    b.closest('details.more')?.removeAttribute('open');
+    if (what === 'log') {
+      if (open.has(name)) open.delete(name); else { open.add(name); loadLog(name); }
+      return latest && render(latest);
+    }
+    if (what === 'download') return download(name);
+    if (what === 'copy') {
+      const dir = latest?.servers.find((s) => s.name === name)?.dir || '';
+      return navigator.clipboard.writeText(dir).then(() => toast('Copied the folder path'), () => toast(dir));
+    }
     if (what === 'stop' && !confirm(`Stop ${name}? It stays stopped until you start it again (or the supervisor restarts).`)) return;
+    if (what === 'disable' && !confirm(`Turn ${name} off? It's stopped and stays off, even after restarts, until you turn it on. (This sets "enabled": false in settings.json.)`)) return;
     b.disabled = true;
     try {
-      const r = await api(`/api/${what}/${encodeURIComponent(name)}`, 'POST');
-      toast(what === 'update' ? (r.updated ? `${name} updated and restarted` : r.error || `${name} is up to date`) : `${name}: ${what === 'stop' ? 'stopped' : what === 'start' ? 'started' : 'restarted'}`);
-    } catch (err) { toast(err.message); }
+      const r = await api(`/api/${what}/${encodeURIComponent(name)}`, { method: 'POST' });
+      if (what === 'update') toast(r.updated ? `${name} updated and restarted` : r.error || `${name} is up to date`, Boolean(r.error && !r.updated));
+      else toast(`${name}: ${done[what]}`);
+    } catch (err) { toast(err.message, true); }
     refresh();
   });
-  $('#check').addEventListener('click', () => api('/api/check', 'POST').then(() => toast('Checking every server for updates…')).catch((e) => toast(e.message)));
-  $('#deploy').addEventListener('submit', async (e) => {
+
+  $('#filters').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-f]');
+    if (!b) return;
+    filter = b.dataset.f;
+    store.set('filter', filter);
+    if (latest) render(latest);
+  });
+  $('#search').addEventListener('input', () => latest && render(latest));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && !/INPUT|TEXTAREA/.test(document.activeElement.tagName) && !$('dialog[open]')) { e.preventDefault(); $('#search').focus(); }
+  });
+  $('#activity').addEventListener('toggle', () => { if ($('#activity').open) refresh(); });
+
+  $('#check').addEventListener('click', () => api('/api/check', { method: 'POST' }).then(() => { toast('Checking every server for updates…'); refresh(); }).catch((e) => toast(e.message, true)));
+  $('#reload').addEventListener('click', () => api('/api/reload', { method: 'POST' }).then(() => { toast('Rescanned'); setTimeout(refresh, 500); }).catch((e) => toast(e.message, true)));
+  $('#restartAll').addEventListener('click', () => {
+    if (!confirm('Restart every server that’s on?')) return;
+    api('/api/restart-all', { method: 'POST' }).then(() => { toast('Restarting every server…'); setTimeout(refresh, 800); }).catch((e) => toast(e.message, true));
+  });
+  for (const b of $$('[data-close]')) b.addEventListener('click', () => b.closest('dialog').close());
+
+  // ---- deploy ----
+  function openDeploy() { $('#deployDlg').showModal(); $('#repo').focus(); }
+  $('#deploy').addEventListener('click', openDeploy);
+  $('#deployForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     const go = $('#go');
     go.disabled = true;
     go.textContent = 'Cloning…';
     try {
-      const r = await fetch('/api/deploy', { method: 'POST', headers: { 'X-Key': key, 'Content-Type': 'application/json' }, body: JSON.stringify({ url: $('#repo').value, name: $('#folder').value }) });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
-      toast(`Deployed into ${data.name}: installing and starting…`);
+      const r = await api('/api/deploy', { method: 'POST', body: JSON.stringify({ url: $('#repo').value, name: $('#folder').value }) });
+      toast(`Deployed into ${r.name}: installing and starting…`);
       $('#repo').value = ''; $('#folder').value = '';
-      open.add(data.name);
-    } catch (err) { toast(err.message); }
+      $('#deployDlg').close();
+      open.add(r.name);
+      filter = 'all';
+    } catch (err) { toast(err.message, true); }
     go.disabled = false;
     go.textContent = 'Deploy';
     refresh();
   });
-  $('#reload').addEventListener('click', () => api('/api/reload', 'POST').then(() => { toast('Rescanned'); setTimeout(refresh, 800); }).catch((e) => toast(e.message)));
+
+  // ---- settings ----
+  const text = $('#settingsText');
+  function checkText() {
+    const out = $('#settingsCheck');
+    try { JSON.parse(text.value); out.textContent = '✓ Valid JSON'; out.className = 'check ok'; return true; }
+    catch (err) { out.textContent = `✗ ${err.message}`; out.className = 'check bad'; return false; }
+  }
+  async function openSettings() {
+    try {
+      const r = await api('/api/settings');
+      text.value = r.text;
+      checkText();
+      $('#settingsDlg').showModal();
+      text.focus();
+    } catch (err) { toast(err.message, true); }
+  }
+  $('#settings').addEventListener('click', openSettings);
+  text.addEventListener('input', checkText);
+  text.addEventListener('keydown', (e) => {
+    if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); text.setRangeText('  ', text.selectionStart, text.selectionEnd, 'end'); checkText(); }
+    if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('#settingsForm').requestSubmit(); }
+  });
+  $('#settingsForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!checkText()) return;
+    try {
+      await api('/api/settings', { method: 'PUT', body: text.value });
+      toast('Saved settings.json');
+      $('#settingsDlg').close();
+      setTimeout(refresh, 400);
+    } catch (err) { $('#settingsCheck').textContent = `✗ ${err.message}`; $('#settingsCheck').className = 'check bad'; }
+  });
+
   refresh();
   setInterval(refresh, 3000);
+  setInterval(tick, 1000);
 </script>
 </body>
 </html>
