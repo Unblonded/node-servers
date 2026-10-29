@@ -156,6 +156,7 @@
   <div class="grow"></div>
   <button class="ghost" id="check" title="Look for new commits on every server now">Check for updates</button>
   <button class="ghost" id="restartAll" title="Restart every server that's on">Restart all</button>
+  <button class="ghost" id="restartSelf" title="Restart the supervisor itself (and every server with it), for example to load a new version of it">Restart service</button>
   <button class="ghost" id="settings" title="Edit settings.json">Settings</button>
   <button class="ghost" id="reload" title="Look at the deployment folder and settings.json now (it also does every few seconds)">Rescan</button>
   <button class="primary" id="deploy">+ Deploy</button>
@@ -417,10 +418,12 @@
     let data;
     try { data = await api('/api/status'); } catch (err) {
       $('#banner').hidden = false;
-      $('#banner').textContent = err.message === 'Failed to fetch' ? 'The supervisor isn’t answering. Is it running? (This page keeps trying.)' : err.message;
+      $('#banner').textContent = restarting ? 'Restarting the service… (this page reconnects by itself)'
+        : err.message === 'Failed to fetch' ? 'The supervisor isn’t answering. Is it running? (This page keeps trying.)' : err.message;
       document.title = '⚠ Node servers';
       return;
     }
+    if (restarting && data.since > restarting) { restarting = 0; toast('The service is back up'); }
     latest = data;
     const n = data.servers.length;
     const on = data.servers.filter((s) => s.status !== 'disabled').length;
@@ -505,6 +508,11 @@
   $('#restartAll').addEventListener('click', () => {
     if (!confirm('Restart every server that’s on?')) return;
     api('/api/restart-all', { method: 'POST' }).then(() => { toast('Restarting every server…'); setTimeout(refresh, 800); }).catch((e) => toast(e.message, true));
+  });
+  let restarting = 0; // when the service was asked to restart, until a newer one answers
+  $('#restartSelf').addEventListener('click', () => {
+    if (!confirm('Restart the service? Every server stops and starts again with it, so they’re down for a few seconds.')) return;
+    api('/api/restart-self', { method: 'POST' }).then(() => { restarting = Date.now(); toast('Restarting the service…'); }).catch((e) => toast(e.message, true));
   });
   for (const b of $$('[data-close]')) b.addEventListener('click', () => b.closest('dialog').close());
 

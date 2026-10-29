@@ -96,6 +96,17 @@ function shell(command, cwd, log) {
   });
 }
 
+// Every process: pid, parent, name, memory, CPU time (100 ns units) and when it started (ms).
+async function processList() {
+  const out = await run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+    'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId),$($_.ParentProcessId),$($_.WorkingSetSize),$($_.UserModeTime + $_.KernelModeTime),$(if ($_.CreationDate) { ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }),$($_.Name)" }'],
+  here, { timeout: 30_000 });
+  return out.split(/\r?\n/).map((line) => {
+    const [pid, parent, mem, time, created, ...name] = line.split(',');
+    return { pid: Number(pid), parent: Number(parent), mem: Number(mem), time: Number(time), created: Number(created), name: name.join(',').trim() };
+  }).filter((p) => p.pid);
+}
+
 // Ends a process and everything it started (a server started through npm or cmd is a few processes deep).
 function killTree(pid) {
   return new Promise((resolve) => execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve()));
@@ -162,7 +173,7 @@ function scan() {
 // ---- servers ----
 const servers = new Map(); // name → state
 const savePids = () => {
-  const pids = Object.fromEntries([...servers.values()].filter((s) => s.child).map((s) => [s.cfg.name, s.child.pid]));
+  const pids = Object.fromEntries([...servers.values()].filter((s) => s.child).map((s) => [s.cfg.name, { pid: s.child.pid, at: s.startedAt }]));
   fs.writeFileSync(PIDS, JSON.stringify({ supervisor: process.pid, servers: pids }, null, 2));
 };
 
@@ -379,18 +390,12 @@ async function sample() {
   if (!running.length || sampling) return;
   sampling = true;
   try {
-    const [procs, net] = await Promise.all([
-      run('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId),$($_.ParentProcessId),$($_.WorkingSetSize),$($_.UserModeTime + $_.KernelModeTime)" }'], here, { timeout: 30_000 }),
-      run('netstat', ['-ano'], here, { timeout: 30_000 }),
-    ]);
+    const [procs, net] = await Promise.all([processList(), run('netstat', ['-ano'], here, { timeout: 30_000 })]);
     const now = Date.now();
     const wall = now - lastSample;
     const kids = new Map();
     const info = new Map();
-    for (const line of procs.split(/\r?\n/)) {
-      const [pid, parent, mem, time] = line.split(',').map(Number);
-      if (!pid) continue;
+    for (const { pid, parent, mem, time } of procs) {
       info.set(pid, { mem, time });
       if (parent !== pid) kids.set(parent, [...(kids.get(parent) || []), pid]);
     }
@@ -570,6 +575,12 @@ function startDashboard(port, key) {
         return send(200, { ok: true });
       } catch (err) { return send(400, { error: err.message }); }
     }
+    if (req.method === 'POST' && url.pathname === '/api/restart-self') {
+      say('Restarting the supervisor (from the dashboard)');
+      send(200, { ok: true });
+      setTimeout(() => shutdown(RELAUNCH), 300); // run.cmd starts it again
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/api/restart-all') {
       say('Restarting every server (from the dashboard)');
       for (const s of servers.values()) if (!s.held && !s.cfg.disabled) restartServer(s);
@@ -620,7 +631,9 @@ function startDashboard(port, key) {
 
 // ---- leftovers, start and stop ----
 // A previous run that was ended hard (Task Scheduler's End, a crash) can leave its servers running and
-// holding their ports. Stop them, but only processes that still look like ours.
+// holding their ports. Ending it hard often ends each server's cmd but not the node under it, so look
+// for everything that cmd started too. Only processes that still look like ours, and that started when
+// that server did or later (so not a new process that happens to have an old pid).
 async function stopLeftovers() {
   let old;
   try { old = JSON.parse(fs.readFileSync(PIDS, 'utf8')); } catch { return; }
@@ -629,10 +642,28 @@ async function stopLeftovers() {
     say(`Stopping the previous supervisor (pid ${old.supervisor})`);
     await killTree(old.supervisor);
   }
-  for (const [name, pid] of Object.entries(old.servers || {})) {
-    if (!(await looksLikeOurs(pid))) continue;
-    say(`${name}: stopping the copy a previous run left behind (pid ${pid})`);
-    await killTree(pid);
+  const entries = Object.entries(old.servers || {});
+  if (!entries.length) return;
+  let procs;
+  try { procs = await processList(); } catch (err) { say(`Couldn't list processes to tidy up: ${err.message}`); return; }
+  const kids = new Map();
+  for (const p of procs) if (p.parent !== p.pid) kids.set(p.parent, [...(kids.get(p.parent) || []), p]);
+  for (const [name, saved] of entries) {
+    const { pid, at = 0 } = typeof saved === 'number' ? { pid: saved } : saved;
+    const ours = (p) => /^(cmd|node|npm|conhost)(\.exe)?$/i.test(p.name) && p.created >= at - 2000;
+    if (procs.some((p) => p.pid === pid && ours(p))) {
+      say(`${name}: stopping the copy a previous run left behind (pid ${pid})`);
+      await killTree(pid);
+      continue;
+    }
+    // Its cmd is gone: stop whatever it started that's still running.
+    const left = [];
+    const walk = (parent) => { for (const p of kids.get(parent) || []) if (ours(p) && !left.includes(p.pid)) { left.push(p.pid); walk(p.pid); } };
+    walk(pid);
+    for (const orphan of left) {
+      say(`${name}: stopping a process a previous run left behind (pid ${orphan})`);
+      await killTree(orphan);
+    }
   }
 }
 async function looksLikeOurs(pid, kind = /^(cmd|node|npm)$/i) {

@@ -87,6 +87,7 @@ Changes apply within a few seconds. If the file has a mistake, the last good set
 - **Stop a server for a while:** its **Stop** button. It stays stopped until you start it again or the supervisor restarts.
 - **Turn a server off for good:** **⋯ → Turn off**. This sets `"enabled": false` in `settings.json`, so it stays off after restarts until you click **Turn on**.
 - **Change settings:** the dashboard's **Settings** button edits `settings.json`. It won't save broken JSON.
+- **Restart the whole service** (the supervisor and every server, for example to load a new version you committed on this PC): the dashboard's **Restart service** button.
 - **Run it by hand instead** (to watch it): double-click `run.cmd`. Close the window to stop it. Don't do this while the service is running.
 - **The service itself** is the **Node servers** task in Task Scheduler. *End* stops it and *Run* starts it again; the next run tidies up anything the old one left running.
 
