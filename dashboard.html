@@ -36,7 +36,7 @@
   .running { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
   .running::before { animation: pulse 2s infinite; }
   .crashed, .error { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
-  .updating, .starting { color: var(--amber); background: color-mix(in srgb, var(--amber) 16%, transparent); }
+  .updating, .starting, .installing { color: var(--amber); background: color-mix(in srgb, var(--amber) 16%, transparent); }
   .stopped { color: var(--grey); background: color-mix(in srgb, var(--grey) 16%, transparent); }
   @keyframes pulse { 50% { opacity: .35; } }
   .meta { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
@@ -52,6 +52,13 @@
     border-radius: 12px; font-size: 13px; font-weight: 600; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.on { opacity: 1; }
   .offline { color: var(--red); font-weight: 600; }
+  .deploy { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .deploy input { flex: 1; min-width: 180px; font: inherit; font-size: 13px; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .deploy input.short { flex: 0 1 170px; }
+  .deploy input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .hint { color: var(--muted); font-size: 12.5px; }
+  .hint code, .empty code { font-family: var(--mono); font-size: 12px; background: var(--hover); padding: 1px 5px; border-radius: 5px; }
+  .how { color: var(--muted); font-size: 12px; }
   @media (max-width: 600px) { header, main { padding-left: 14px; padding-right: 14px; } .actions { margin-left: 0; } }
 </style>
 </head>
@@ -60,9 +67,20 @@
   <div><h1>Node servers</h1><div class="sub" id="sub">Loading…</div></div>
   <div class="grow"></div>
   <button id="check" title="Look for new commits on every server now">Check for updates</button>
-  <button id="reload" title="Apply servers.json now (it also applies by itself when saved)">Reload servers.json</button>
+  <button id="reload" title="Look at the deployment folder and settings.json now (it also does every few seconds)">Rescan</button>
 </header>
-<main id="list"></main>
+<main>
+  <section class="card">
+    <div class="row"><span class="name" style="font-size:15px">Deploy from GitHub</span><span class="hint" id="where"></span></div>
+    <form class="deploy" id="deploy">
+      <input id="repo" placeholder="https://github.com/you/your-server" autocomplete="off" spellcheck="false" required>
+      <input id="folder" class="short" placeholder="Folder name (optional)" autocomplete="off" spellcheck="false">
+      <button class="primary" id="go">Deploy</button>
+    </form>
+    <div class="hint">Clones it into the deployment folder, installs its packages and starts it. Or just put a folder there yourself: it's picked up within a few seconds.</div>
+  </section>
+  <div id="list" style="display:grid;gap:12px"></div>
+</main>
 <div class="toast" id="toast"></div>
 <script>
   // The key arrives in the address (from open-dashboard.bat); keep it for this tab and take it out of the address bar.
@@ -106,7 +124,8 @@
         ${s.pid ? `<span>PID <b>${s.pid}</b></span>` : ''}
         ${s.git ? `<span>Checked <b>${ago(s.lastCheck)}</b></span><span>Updated <b>${s.lastUpdate ? `${ago(s.lastUpdate.at)}: ${esc(s.lastUpdate.subject.slice(0, 70))}` : 'not since starting'}</b></span>` : '<span>Not a git repo: no auto-update</span>'}
       </div>
-      <div class="cmd">${esc(s.start)} · ${esc(s.dir)}</div>
+      <div class="cmd">${s.start ? esc(s.start) : 'no start command'} · ${esc(s.dir)}</div>
+      ${s.how && s.how !== s.start ? `<div class="how">How it starts: ${esc(s.how)}</div>` : ''}
       ${s.error ? `<div class="err">${esc(s.error)}</div>` : ''}
       <pre class="log"></pre>
     </section>`;
@@ -119,7 +138,8 @@
       const up = data.servers.filter((s) => s.status === 'running').length;
       $('#sub').innerHTML = `${esc(data.host ? `${data.host} · ` : '')}${up} of ${n} running · supervisor up ${since(data.since)} · checks GitHub every ${data.checkEvery}s`;
       const logs = new Map([...document.querySelectorAll('.card.open')].map((c) => [c.dataset.name, $('.log', c)]));
-      $('#list').innerHTML = n ? data.servers.map(card).join('') : '<div class="card empty">No servers yet. Add them to <b>servers.json</b> and save: they start straight away.</div>';
+      $('#where').innerHTML = `→ <code>${esc(data.deployDir)}</code>`;
+      $('#list').innerHTML = n ? data.servers.map(card).join('') : `<div class="card empty">No servers yet. Put each server's folder in <code>${esc(data.deployDir)}</code>, or deploy one from GitHub above.</div>`;
       for (const [name, old] of logs) { const pre = $(`.card[data-name="${CSS.escape(name)}"] .log`); if (pre) { pre.textContent = old.textContent; pre.scrollTop = old.scrollTop; } }
       for (const name of open) loadLog(name);
     } catch (err) {
@@ -150,7 +170,24 @@
     refresh();
   });
   $('#check').addEventListener('click', () => api('/api/check', 'POST').then(() => toast('Checking every server for updates…')).catch((e) => toast(e.message)));
-  $('#reload').addEventListener('click', () => api('/api/reload', 'POST').then(() => { toast('servers.json applied'); setTimeout(refresh, 800); }).catch((e) => toast(e.message)));
+  $('#deploy').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const go = $('#go');
+    go.disabled = true;
+    go.textContent = 'Cloning…';
+    try {
+      const r = await fetch('/api/deploy', { method: 'POST', headers: { 'X-Key': key, 'Content-Type': 'application/json' }, body: JSON.stringify({ url: $('#repo').value, name: $('#folder').value }) });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+      toast(`Deployed into ${data.name}: installing and starting…`);
+      $('#repo').value = ''; $('#folder').value = '';
+      open.add(data.name);
+    } catch (err) { toast(err.message); }
+    go.disabled = false;
+    go.textContent = 'Deploy';
+    refresh();
+  });
+  $('#reload').addEventListener('click', () => api('/api/reload', 'POST').then(() => { toast('Rescanned'); setTimeout(refresh, 800); }).catch((e) => toast(e.message)));
   refresh();
   setInterval(refresh, 3000);
 </script>

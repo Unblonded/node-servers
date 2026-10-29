@@ -20,23 +20,49 @@ Set-Content -Path (Join-Path $here 'node-path.txt') -Value $node -NoNewline
 Write-Host "Node: $node ($(& $node --version))"
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) { Write-Host 'Git isn''t installed, so servers won''t update themselves. Get it from https://git-scm.com' -ForegroundColor Yellow }
 
-# The list of servers.
-$list = Join-Path $here 'servers.json'
-if (-not (Test-Path $list)) {
-  Copy-Item (Join-Path $here 'servers.example.json') $list
-  Write-Host ''
-  Write-Host 'Made servers.json from the example. Opening it now: put in your servers (name, folder, start command), save, and close Notepad.' -ForegroundColor Yellow
-  Start-Process notepad.exe $list -Wait
+# The servers live next to this project, in deployment\ (one folder each), unless settings.json says otherwise.
+$deploy = Join-Path (Split-Path -Parent $here) 'deployment'
+$settingsFile = Join-Path $here 'settings.json'
+if (Test-Path $settingsFile) {
+  try {
+    $custom = (Get-Content $settingsFile -Raw | ConvertFrom-Json).deployment
+    if ($custom) { $deploy = if ([IO.Path]::IsPathRooted($custom)) { $custom } else { [IO.Path]::GetFullPath((Join-Path $here $custom)) } }
+  } catch { Write-Host "settings.json has a mistake, so it's ignored here: $($_.Exception.Message)" -ForegroundColor Yellow }
 }
-try { $servers = (Get-Content $list -Raw | ConvertFrom-Json).servers } catch { throw "servers.json isn't valid JSON: $($_.Exception.Message)" }
-foreach ($s in $servers) {
-  if ($s.enabled -eq $false) { continue }
-  $dir = if ([IO.Path]::IsPathRooted($s.dir)) { $s.dir } else { Join-Path $here $s.dir }
-  $mark = if (Test-Path $dir) { 'ok' } else { 'FOLDER NOT FOUND' }
-  Write-Host ("  {0,-20} {1}  [{2}]" -f $s.name, $dir, $mark)
+New-Item -ItemType Directory -Force -Path $deploy | Out-Null
+Write-Host ''
+Write-Host "Servers go in: $deploy" -ForegroundColor Cyan
+Write-Host '(one folder per server; each is found, installed and started automatically)'
+
+# Bring in servers that already live somewhere else, like Capri. Moving the whole folder keeps its data
+# (Capri's data\ folder holds everyone's sign-ins and notes) and its .env.
+Write-Host ''
+while ($true) {
+  $from = (Read-Host 'Move an existing server folder in? Paste its path, or press Enter to skip').Trim('" ')
+  if (-not $from) { break }
+  if (-not (Test-Path $from -PathType Container)) { Write-Host "  Not a folder: $from" -ForegroundColor Yellow; continue }
+  $dest = Join-Path $deploy (Split-Path -Leaf $from)
+  if (Test-Path $dest) { Write-Host "  deployment\$(Split-Path -Leaf $from) already exists." -ForegroundColor Yellow; continue }
+  try { Move-Item -LiteralPath $from -Destination $dest; Write-Host "  Moved to $dest" -ForegroundColor Green }
+  catch { Write-Host "  Couldn't move it (is it still running? close its window first): $($_.Exception.Message)" -ForegroundColor Yellow }
 }
 
-# Capri's own start-server.bat in the Startup folder would start a second copy on the same port.
+# Or clone them from GitHub.
+while ($true) {
+  $repo = (Read-Host 'Clone a server from GitHub? Paste its address, or press Enter to skip').Trim()
+  if (-not $repo) { break }
+  $name = ($repo.TrimEnd('/') -split '[/:]')[-1] -replace '\.git$', ''
+  $dest = Join-Path $deploy $name
+  if (Test-Path $dest) { Write-Host "  deployment\$name already exists." -ForegroundColor Yellow; continue }
+  git clone $repo $dest
+  if ($LASTEXITCODE -eq 0) { Write-Host "  Cloned into $dest" -ForegroundColor Green } else { Write-Host '  The clone failed (see above).' -ForegroundColor Yellow }
+}
+
+$found = Get-ChildItem $deploy -Directory | Where-Object { $_.Name -notmatch '^[._]' }
+Write-Host ''
+if ($found) { Write-Host "Servers found: $($found.Name -join ', ')" } else { Write-Host 'No servers in deployment\ yet: add folders any time (or deploy from the dashboard).' -ForegroundColor Yellow }
+
+# Capri's old start-server.bat in the Startup folder would start a second copy on the same port.
 $startup = [Environment]::GetFolderPath('Startup')
 $shell = New-Object -ComObject WScript.Shell
 $old = Get-ChildItem $startup -Filter *.lnk -ErrorAction SilentlyContinue | Where-Object { $shell.CreateShortcut($_.FullName).TargetPath -match 'start-server\.bat$' }
@@ -60,7 +86,7 @@ $trigger = New-ScheduledTaskTrigger -AtStartup
 # No time limit (Windows stops tasks after 3 days otherwise), and start it again if it stops.
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) `
   -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName $task -Description 'Runs and auto-updates the Node servers in servers.json' `
+Register-ScheduledTask -TaskName $task -Description 'Runs and auto-updates the Node servers in the deployment folder' `
   -Action $action -Trigger $trigger -Settings $settings -User $user -Password $cred.GetNetworkCredential().Password -RunLevel Highest -Force | Out-Null
 Write-Host "Registered the '$task' task." -ForegroundColor Green
 
@@ -79,4 +105,4 @@ for ($i = 0; $i -lt 20 -and -not (Test-Path (Join-Path $here 'dashboard.url')); 
 if (Test-Path (Join-Path $here 'dashboard.url')) { Start-Process (Get-Content (Join-Path $here 'dashboard.url') -Raw).Trim() }
 else { Write-Host 'The dashboard isn''t up yet: check logs\supervisor.log, or try open-dashboard.bat in a moment.' -ForegroundColor Yellow }
 Write-Host ''
-Write-Host 'Done. Edit servers.json any time (it applies when you save). open-dashboard.bat shows everything.'
+Write-Host "Done. Add a server any time by putting its folder in $deploy (or deploying it from the dashboard). open-dashboard.bat shows everything."

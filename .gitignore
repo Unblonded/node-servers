@@ -1,5 +1,5 @@
-# This PC's own list, logs and dashboard key: never in git, so updates never touch them
-servers.json
+# This PC's settings, logs and dashboard key: never in git, so updates never touch them
+settings.json
 logs/
 .dashboard-key
 dashboard.url

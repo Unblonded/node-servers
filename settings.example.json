@@ -1,0 +1,9 @@
+{
+  "checkEvery": 60,
+  "dashboardPort": 3399,
+  "servers": {
+    "capri": { "env": { "PORT": "3300" } },
+    "old-thing": { "enabled": false },
+    "my-bot": { "start": "npm run serve", "update": false }
+  }
+}

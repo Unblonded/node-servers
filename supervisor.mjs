@@ -1,12 +1,21 @@
-// Runs every Node server on this Windows PC and keeps them running. The list is servers.json in this folder
-// (made from servers.example.json the first time). For each server it:
+// Runs every Node server on this Windows PC and keeps them running. The servers live next to this project:
+//   C:\Servers\               (any folder)
+//     node-servers\           this project
+//     deployment\             one folder per server (folders starting with _ or . are skipped)
+//       capri\
+// (settings.json's "deployment" can point somewhere else.) For each server it:
+//   - works out how to start it: package.json's "start" script (npm start), else server.js, index.js,
+//     app.js or main.js, else package.json's "main";
+//   - runs npm install first if it has a package.json but no node_modules yet;
 //   - starts it, and starts it again if it crashes (waiting longer each time it keeps crashing);
-//   - keeps its output in logs/<name>.log (the last 5 MB, then logs/<name>.1.log);
-//   - if its folder is a git repo, checks for new commits every minute; when there are some it pulls
-//     them, installs packages if they changed (or runs the server's own update command), and restarts it.
-// Saving servers.json applies it straight away: new servers start, removed ones stop, changed ones restart.
-// A dashboard at http://127.0.0.1:3399 (this PC only, behind a key) shows them and can restart, update,
-// stop and start each one. open-dashboard.bat opens it.
+//   - keeps its output in logs\<name>.log (the last 5 MB, then logs\<name>.1.log);
+//   - if it's a git repo, checks for new commits every minute; when there are some it runs its "update"
+//     script if package.json has one (Capri's does), or else pulls them and runs npm install if packages
+//     changed; then restarts it.
+// New folders start within a few seconds, and removed ones stop. settings.json (optional) can change the
+// check interval and dashboard port, and override any server's start command, update, env or turn it off.
+// A dashboard at http://127.0.0.1:3399 (this PC only, behind a key) shows them, can restart, update, stop
+// and start each one, and can deploy a new one from GitHub. open-dashboard.bat opens it.
 // It updates itself the same way from its own repo, then restarts (run.cmd starts it again).
 // install.bat registers run.cmd with Windows to start this when the PC turns on.
 //   node supervisor.mjs            run everything
@@ -20,8 +29,12 @@ import { fileURLToPath } from 'node:url';
 
 const self = fileURLToPath(import.meta.url);
 const here = path.dirname(self);
-const CONFIG = path.join(here, 'servers.json');
-const EXAMPLE = path.join(here, 'servers.example.json');
+const SETTINGS = path.join(here, 'settings.json');
+// Next to this project, or wherever settings.json's "deployment" says.
+const DEPLOY = (() => {
+  try { const d = JSON.parse(fs.readFileSync(SETTINGS, 'utf8')).deployment; if (d) return path.resolve(here, d); } catch { /* none or broken: the default */ }
+  return path.resolve(here, '..', 'deployment');
+})();
 const LOGS = path.join(here, 'logs');
 const PIDS = path.join(LOGS, 'pids.json');
 const KEY_FILE = path.join(here, '.dashboard-key');
@@ -30,6 +43,7 @@ const RELAUNCH = 75; // asks run.cmd to start this again (it was updated)
 const LOG_MAX = 5 * 1024 * 1024;
 
 fs.mkdirSync(LOGS, { recursive: true });
+fs.mkdirSync(DEPLOY, { recursive: true });
 
 // ---- logs ----
 // Appends lines with a time in front, and starts a new file past 5 MB (keeping the previous one).
@@ -84,20 +98,61 @@ function killTree(pid) {
   return new Promise((resolve) => execFile('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true }, () => resolve()));
 }
 
-// ---- config ----
-function readConfig() {
-  if (!fs.existsSync(CONFIG)) fs.copyFileSync(EXAMPLE, CONFIG);
-  const raw = JSON.parse(fs.readFileSync(CONFIG, 'utf8'));
-  const seen = new Set();
-  const servers = (raw.servers || []).filter((s) => s && s.enabled !== false).map((s) => {
-    const name = String(s.name || '').trim();
-    if (!/^[\w.-]{1,40}$/.test(name)) throw new Error(`Server name "${s.name}" can only use letters, numbers, - _ and .`);
-    if (seen.has(name)) throw new Error(`Two servers are called "${name}".`);
-    seen.add(name);
-    if (!s.start) throw new Error(`"${name}" needs a start command, like "node server.js" or "npm start".`);
-    return { name, dir: path.resolve(here, s.dir || '.'), start: String(s.start), env: s.env || {}, update: s.update ?? true };
-  });
-  return { checkEvery: Math.max(15, Number(raw.checkEvery) || 60), dashboardPort: Number(raw.dashboardPort) || 3399, servers };
+// ---- finding the servers ----
+const NAME = /^[\w.-]{1,60}$/;
+const ENTRY_FILES = ['server.js', 'index.js', 'app.js', 'main.js', 'server.mjs', 'index.mjs', 'app.mjs', 'server.cjs', 'index.cjs'];
+const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
+
+// settings.json, or the last good version of it while it has a mistake (said once in the log).
+let goodSettings = {};
+let settingsProblem = '';
+function readSettings() {
+  try {
+    goodSettings = fs.existsSync(SETTINGS) ? JSON.parse(fs.readFileSync(SETTINGS, 'utf8')) : {};
+    settingsProblem = '';
+  } catch (err) {
+    const msg = `settings.json has a mistake, so the last good settings stay in use: ${err.message}`;
+    if (msg !== settingsProblem) say(msg);
+    settingsProblem = msg;
+  }
+  return goodSettings;
+}
+
+// How to run one folder, from settings.json's override for it, else what's in the folder.
+function detect(name, dir, over = {}) {
+  const pkg = readJson(path.join(dir, 'package.json'));
+  let start = over.start;
+  let how = 'from settings.json';
+  if (!start && pkg?.scripts?.start) { start = 'npm start'; how = `npm start → ${pkg.scripts.start}`; }
+  if (!start) {
+    const file = ENTRY_FILES.find((f) => fs.existsSync(path.join(dir, f)));
+    if (file) { start = `node ${file}`; how = `found ${file}`; }
+  }
+  if (!start && pkg?.main && fs.existsSync(path.join(dir, pkg.main))) { start = `node ${pkg.main}`; how = 'package.json "main"'; }
+  const update = over.update ?? (pkg?.scripts?.update ? 'npm run update' : true);
+  return {
+    name, dir, start: start || '', how: start ? how : '', env: over.env || {}, update,
+    packages: Boolean(pkg && Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).length), // anything to npm install
+    error: start ? '' : 'Can’t tell how to start it: add a "start" script to its package.json, a server.js / index.js, or a start command in settings.json.',
+  };
+}
+
+const warned = new Set(); // folder names already reported as unusable
+function scan() {
+  const settings = readSettings();
+  const over = settings.servers || {};
+  const servers = [];
+  for (const entry of fs.readdirSync(DEPLOY, { withFileTypes: true })) {
+    if (!entry.isDirectory() || /^[._]/.test(entry.name)) continue;
+    if (!NAME.test(entry.name)) {
+      if (!warned.has(entry.name)) say(`Skipping deployment\\${entry.name}: folder names can only use letters, numbers, - _ and .`);
+      warned.add(entry.name);
+      continue;
+    }
+    if (over[entry.name]?.enabled === false) continue;
+    servers.push(detect(entry.name, path.join(DEPLOY, entry.name), over[entry.name]));
+  }
+  return { checkEvery: Math.max(15, Number(settings.checkEvery) || 60), dashboardPort: Number(settings.dashboardPort) || 3399, servers };
 }
 
 // ---- servers ----
@@ -107,15 +162,27 @@ const savePids = () => {
   fs.writeFileSync(PIDS, JSON.stringify({ supervisor: process.pid, servers: pids }, null, 2));
 };
 
-function startServer(s) {
+async function startServer(s) {
   clearTimeout(s.retry);
-  if (s.child || s.held) return;
-  if (!fs.existsSync(s.cfg.dir)) {
-    s.status = 'error';
-    s.error = `Folder not found: ${s.cfg.dir}`;
-    s.log.line(s.error);
-    s.retry = setTimeout(() => startServer(s), 60_000);
-    return;
+  if (s.child || s.held || s.installing) return;
+  if (s.cfg.error) { s.status = 'error'; s.error = s.cfg.error; return; } // tried again when the folder changes
+  // Just deployed: its packages aren't installed yet.
+  if (s.cfg.packages && !fs.existsSync(path.join(s.cfg.dir, 'node_modules'))) {
+    s.installing = true;
+    s.status = 'installing';
+    s.log.line('── installing packages: npm install');
+    say(`${s.cfg.name}: installing packages`);
+    try { await shell('npm install --no-audit --no-fund', s.cfg.dir, s.log); }
+    catch (err) {
+      s.installing = false;
+      s.status = 'error';
+      s.error = `npm install failed: ${err.message}. Trying again in 5 minutes.`;
+      s.log.line(`── ${s.error}`);
+      s.retry = setTimeout(() => startServer(s), 5 * 60_000);
+      return;
+    }
+    s.installing = false;
+    if (s.held || s.child || !servers.has(s.cfg.name)) return;
   }
   s.status = 'running';
   s.error = '';
@@ -168,7 +235,7 @@ const isRepo = (dir) => fs.existsSync(path.join(dir, '.git'));
 
 // Pulls new commits for one server and restarts it; the old version keeps serving while packages install.
 async function updateServer(s, { force = false } = {}) {
-  if (s.updating || s.cfg.update === false || !isRepo(s.cfg.dir)) return false;
+  if (s.updating || s.installing || s.cfg.update === false || !isRepo(s.cfg.dir)) return false;
   s.updating = true;
   try {
     const dir = s.cfg.dir;
@@ -194,9 +261,12 @@ async function updateServer(s, { force = false } = {}) {
       const files = await git(dir, 'diff', '--name-only', before, 'HEAD');
       if (/(^|\n)package(-lock)?\.json$/m.test(files) && fs.existsSync(path.join(dir, 'package.json'))) {
         s.log.line('── packages changed: npm install');
-        await shell('npm install --omit=dev --no-audit --no-fund', dir, s.log);
+        await shell('npm install --no-audit --no-fund', dir, s.log);
       }
     }
+    // The pull may have changed how it starts (a new start script, say).
+    const fresh = detect(s.cfg.name, dir, (readSettings().servers || {})[s.cfg.name]);
+    s.cfg = fresh;
     s.lastUpdate = { at: Date.now(), subject };
     s.status = 'running';
     if (!s.held) await restartServer(s);
@@ -226,7 +296,8 @@ async function checkAll() {
 }
 
 // This kit's own repo: pull new commits, and restart if the supervisor or its dashboard changed.
-// servers.json, the logs and the dashboard key aren't in git, so a pull never touches them.
+// settings.json, the logs and the dashboard key aren't in git (and the servers live outside this folder),
+// so a pull never touches them.
 async function updateSelf() {
   if (!isRepo(here)) return;
   try {
@@ -245,21 +316,49 @@ async function updateSelf() {
   }
 }
 
-// ---- servers.json changes ----
+// ---- deployment\ and settings.json changes ----
+// Every few seconds: start servers in new folders, stop ones whose folder went, restart ones whose
+// settings or start command changed.
 function applyConfig() {
   let next;
-  try { next = readConfig(); } catch (err) { say(`servers.json has a problem, so nothing changed: ${err.message}`); return; }
+  try { next = scan(); } catch (err) { say(`Couldn't look in the deployment folder: ${err.message}`); return; }
   const names = new Set(next.servers.map((c) => c.name));
   for (const [name, s] of servers) {
-    if (!names.has(name)) { say(`${name}: removed from servers.json; stopping it`); stopServer(s); servers.delete(name); }
+    if (!names.has(name)) { say(`${name}: its folder is gone (or it was turned off); stopping it`); s.held = true; stopServer(s); servers.delete(name); }
   }
   for (const cfg of next.servers) {
     const s = servers.get(cfg.name);
-    if (!s) { say(`${cfg.name}: added`); addServer(cfg); }
-    else if (JSON.stringify(s.cfg) !== JSON.stringify(cfg)) { say(`${cfg.name}: settings changed; restarting it`); s.cfg = cfg; restartServer(s); }
+    if (!s) { say(`${cfg.name}: found in deployment\\${cfg.error ? ` (${cfg.error})` : `; ${cfg.how}`}`); addServer(cfg); }
+    else if (!s.updating && !s.installing && JSON.stringify(s.cfg) !== JSON.stringify(cfg)) {
+      s.cfg = cfg;
+      if (cfg.error) { stopServer(s); s.status = 'error'; s.error = cfg.error; continue; }
+      say(`${cfg.name}: how it runs changed (${cfg.how}); restarting it`);
+      restartServer(s);
+    }
   }
   if (config && next.dashboardPort !== config.dashboardPort) say('The dashboard port changes next time the supervisor starts.');
   config = { ...next, dashboardPort: config?.dashboardPort ?? next.dashboardPort };
+}
+
+// Clones a repo into deployment\; the next scan finds it, installs its packages and starts it.
+async function deploy(url, name) {
+  url = String(url || '').trim();
+  if (!/^(https:\/\/[\w.-]+\/[\w./-]+?|git@[\w.-]+:[\w./-]+?)(\.git)?\/?$/.test(url)) throw new Error('That doesn’t look like a git address (https://github.com/you/repo).');
+  name = String(name || '').trim() || url.replace(/\/$/, '').split(/[/:]/).pop().replace(/\.git$/, '');
+  if (!NAME.test(name) || /^[._]/.test(name)) throw new Error('The folder name can only use letters, numbers, - _ and . (and can’t start with . or _).');
+  const dir = path.join(DEPLOY, name);
+  if (fs.existsSync(dir)) throw new Error(`deployment\\${name} already exists.`);
+  say(`Deploying ${url} into deployment\\${name}`);
+  const tmp = path.join(DEPLOY, `_cloning-${name}`); // skipped by scans until it's complete
+  try {
+    await run('git', ['clone', '--quiet', url, tmp], here, { timeout: 10 * 60_000 });
+    fs.renameSync(tmp, dir);
+  } catch (err) {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    throw new Error(`git clone failed: ${(err.output || err.message).split('\n').filter(Boolean).pop()}`);
+  }
+  applyConfig();
+  return name;
 }
 
 // ---- the dashboard ----
@@ -272,7 +371,7 @@ function dashboardKey() {
 
 function statusJson() {
   return [...servers.values()].map((s) => ({
-    name: s.cfg.name, dir: s.cfg.dir, start: s.cfg.start, status: s.held ? 'stopped' : s.status, pid: s.child?.pid || null,
+    name: s.cfg.name, dir: s.cfg.dir, start: s.cfg.start, how: s.cfg.how, status: s.held ? 'stopped' : s.status, pid: s.child?.pid || null,
     upSince: s.child ? s.startedAt : null, restarts: s.restarts, error: s.error, git: isRepo(s.cfg.dir) && s.cfg.update !== false,
     lastCheck: s.lastCheck || null, lastUpdate: s.lastUpdate, updating: s.updating,
   }));
@@ -303,7 +402,7 @@ function startDashboard(port, key) {
     const ok = given.length === key.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(key));
     if (!ok) return send(401, url.pathname === '/' ? '<p style="font:15px system-ui;padding:2em">Open the dashboard with <b>open-dashboard.bat</b> (it has the key).</p>' : { error: 'Missing key' }, url.pathname === '/' ? 'text/html' : 'application/json');
     if (req.method === 'GET' && url.pathname === '/') return send(200, page, 'text/html');
-    if (req.method === 'GET' && url.pathname === '/api/status') return send(200, { servers: statusJson(), checkEvery: config.checkEvery, since: started, host: process.env.COMPUTERNAME || '' });
+    if (req.method === 'GET' && url.pathname === '/api/status') return send(200, { servers: statusJson(), checkEvery: config.checkEvery, since: started, host: process.env.COMPUTERNAME || '', deployDir: DEPLOY });
     const log = /^\/api\/log\/([\w.-]+)$/.exec(url.pathname);
     if (req.method === 'GET' && log) return send(200, tail(path.join(LOGS, `${log[1]}.log`)), 'text/plain');
     const act = /^\/api\/(restart|update|stop|start)\/([\w.-]+)$/.exec(url.pathname);
@@ -319,6 +418,14 @@ function startDashboard(port, key) {
     }
     if (req.method === 'POST' && url.pathname === '/api/check') { checkAll(); return send(200, { ok: true }); }
     if (req.method === 'POST' && url.pathname === '/api/reload') { applyConfig(); return send(200, { ok: true }); }
+    if (req.method === 'POST' && url.pathname === '/api/deploy') {
+      let body = '';
+      for await (const chunk of req) { body += chunk; if (body.length > 4096) return send(413, { error: 'Too long' }); }
+      try {
+        const { url: repo, name } = JSON.parse(body || '{}');
+        return send(200, { ok: true, name: await deploy(repo, name) });
+      } catch (err) { return send(400, { error: err.message }); }
+    }
     send(404, { error: 'Not found' });
   });
   server.on('error', (err) => say(`The dashboard couldn't start on port ${port}: ${err.message}`));
@@ -379,10 +486,10 @@ if (process.argv[2] === 'stop-all') {
 
 await stopLeftovers();
 savePids(); // claims the spot for this run
-config = readConfig();
-say(`Starting ${config.servers.length} server${config.servers.length === 1 ? '' : 's'}: ${config.servers.map((c) => c.name).join(', ') || 'none yet (add them to servers.json)'}`);
+config = scan();
+say(`Found ${config.servers.length} server${config.servers.length === 1 ? '' : 's'} in deployment\\: ${config.servers.map((c) => c.name).join(', ') || 'none yet (put their folders in deployment\\)'}`);
 for (const cfg of config.servers) addServer(cfg);
 startDashboard(config.dashboardPort, dashboardKey());
-fs.watchFile(CONFIG, { interval: 2000 }, () => applyConfig());
+setInterval(applyConfig, 4000);
 setTimeout(checkAll, 5000);
 setInterval(checkAll, config.checkEvery * 1000);
