@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Node servers</title>
+<style>
+  :root {
+    --bg: #f4f2ed; --card: #fff; --text: #191b26; --muted: #6b6d7a; --line: rgba(20, 22, 40, .1); --hover: rgba(20, 22, 40, .05);
+    --accent: #5b5bd6; --green: #1f9d55; --red: #d64545; --amber: #c98a0b; --grey: #8a8c99; --mono: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0d0f17; --card: #161927; --text: #eceef6; --muted: #9093a6; --line: rgba(255, 255, 255, .09); --hover: rgba(255, 255, 255, .05);
+      --accent: #8b8bff; --green: #3ccf7a; --red: #ff6b6b; --amber: #f2b73f; --grey: #7c7f92; color-scheme: dark; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 22px 28px 8px; max-width: 1100px; margin: 0 auto; }
+  header h1 { margin: 0; font-size: 21px; letter-spacing: -.01em; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header .grow { flex: 1; }
+  main { max-width: 1100px; margin: 0 auto; padding: 10px 28px 40px; display: grid; gap: 12px; }
+  button { font: inherit; font-size: 13px; font-weight: 600; border: 1px solid var(--line); background: var(--card); color: var(--text);
+    padding: 7px 12px; border-radius: 10px; cursor: pointer; transition: background .15s, transform .1s; }
+  button:hover { background: var(--hover); }
+  button:active { transform: scale(.96); }
+  button:disabled { opacity: .5; cursor: default; }
+  button.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  button.danger { color: var(--red); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px 18px; display: grid; gap: 10px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .name { font-size: 16px; font-weight: 700; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; text-transform: capitalize; }
+  .pill::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .running { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+  .running::before { animation: pulse 2s infinite; }
+  .crashed, .error { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+  .updating, .starting { color: var(--amber); background: color-mix(in srgb, var(--amber) 16%, transparent); }
+  .stopped { color: var(--grey); background: color-mix(in srgb, var(--grey) 16%, transparent); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .meta { display: flex; gap: 18px; flex-wrap: wrap; color: var(--muted); font-size: 12.5px; }
+  .meta b { color: var(--text); font-weight: 600; }
+  .cmd { font-family: var(--mono); font-size: 12px; color: var(--muted); word-break: break-all; }
+  .err { color: var(--red); font-size: 12.5px; }
+  .actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .empty { text-align: center; color: var(--muted); padding: 50px 20px; }
+  .log { display: none; margin: 0; max-height: 420px; overflow: auto; background: #0b0d14; color: #d7dae6; border-radius: 12px;
+    padding: 12px 14px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; }
+  .card.open .log { display: block; }
+  .toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 9px 16px;
+    border-radius: 12px; font-size: 13px; font-weight: 600; opacity: 0; transition: opacity .2s; pointer-events: none; }
+  .toast.on { opacity: 1; }
+  .offline { color: var(--red); font-weight: 600; }
+  @media (max-width: 600px) { header, main { padding-left: 14px; padding-right: 14px; } .actions { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <div><h1>Node servers</h1><div class="sub" id="sub">Loading…</div></div>
+  <div class="grow"></div>
+  <button id="check" title="Look for new commits on every server now">Check for updates</button>
+  <button id="reload" title="Apply servers.json now (it also applies by itself when saved)">Reload servers.json</button>
+</header>
+<main id="list"></main>
+<div class="toast" id="toast"></div>
+<script>
+  // The key arrives in the address (from open-dashboard.bat); keep it for this tab and take it out of the address bar.
+  const params = new URLSearchParams(location.search);
+  if (params.get('key')) { sessionStorage.setItem('key', params.get('key')); history.replaceState(null, '', location.pathname); }
+  const key = sessionStorage.getItem('key') || '';
+  const api = (path, method = 'GET') => fetch(path, { method, headers: { 'X-Key': key } }).then((r) => {
+    if (!r.ok) throw new Error(r.status === 401 ? 'Open this with open-dashboard.bat' : `HTTP ${r.status}`);
+    return (r.headers.get('content-type') || '').includes('json') ? r.json() : r.text();
+  });
+  const $ = (s, el = document) => el.querySelector(s);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const ago = (t) => {
+    if (!t) return 'never';
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  };
+  const since = (t) => (t ? ago(t).replace(' ago', '') : '—');
+  let toastTimer;
+  function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), 2600); }
+
+  const open = new Set(); // servers whose log is showing
+  function card(s) {
+    const status = s.updating ? 'updating' : s.status;
+    return `<section class="card ${open.has(s.name) ? 'open' : ''}" data-name="${esc(s.name)}">
+      <div class="row">
+        <span class="name">${esc(s.name)}</span><span class="pill ${esc(status)}">${esc(status)}</span>
+        <div class="actions">
+          ${s.status === 'stopped' ? `<button class="primary" data-do="start">Start</button>` : `<button data-do="restart">Restart</button>`}
+          ${s.git ? `<button data-do="update" ${s.updating ? 'disabled' : ''}>Update now</button>` : ''}
+          ${s.status !== 'stopped' ? `<button class="danger" data-do="stop">Stop</button>` : ''}
+          <button data-do="log">${open.has(s.name) ? 'Hide log' : 'Log'}</button>
+        </div>
+      </div>
+      <div class="meta">
+        <span>Up <b>${s.upSince ? since(s.upSince) : '—'}</b></span>
+        <span>Restarts <b>${s.restarts}</b></span>
+        ${s.pid ? `<span>PID <b>${s.pid}</b></span>` : ''}
+        ${s.git ? `<span>Checked <b>${ago(s.lastCheck)}</b></span><span>Updated <b>${s.lastUpdate ? `${ago(s.lastUpdate.at)}: ${esc(s.lastUpdate.subject.slice(0, 70))}` : 'not since starting'}</b></span>` : '<span>Not a git repo: no auto-update</span>'}
+      </div>
+      <div class="cmd">${esc(s.start)} · ${esc(s.dir)}</div>
+      ${s.error ? `<div class="err">${esc(s.error)}</div>` : ''}
+      <pre class="log"></pre>
+    </section>`;
+  }
+
+  async function refresh() {
+    try {
+      const data = await api('/api/status');
+      const n = data.servers.length;
+      const up = data.servers.filter((s) => s.status === 'running').length;
+      $('#sub').innerHTML = `${esc(data.host ? `${data.host} · ` : '')}${up} of ${n} running · supervisor up ${since(data.since)} · checks GitHub every ${data.checkEvery}s`;
+      const logs = new Map([...document.querySelectorAll('.card.open')].map((c) => [c.dataset.name, $('.log', c)]));
+      $('#list').innerHTML = n ? data.servers.map(card).join('') : '<div class="card empty">No servers yet. Add them to <b>servers.json</b> and save: they start straight away.</div>';
+      for (const [name, old] of logs) { const pre = $(`.card[data-name="${CSS.escape(name)}"] .log`); if (pre) { pre.textContent = old.textContent; pre.scrollTop = old.scrollTop; } }
+      for (const name of open) loadLog(name);
+    } catch (err) {
+      $('#sub').innerHTML = `<span class="offline">${esc(err.message === 'Failed to fetch' ? 'The supervisor isn’t answering. Is it running?' : err.message)}</span>`;
+    }
+  }
+
+  async function loadLog(name) {
+    const pre = $(`.card[data-name="${CSS.escape(name)}"] .log`);
+    if (!pre) return;
+    const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 30 || !pre.textContent;
+    pre.textContent = (await api(`/api/log/${encodeURIComponent(name)}`).catch(() => '')) || '(nothing logged yet)';
+    if (atEnd) pre.scrollTop = pre.scrollHeight;
+  }
+
+  document.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-do]');
+    if (!b) return;
+    const name = b.closest('.card').dataset.name;
+    const what = b.dataset.do;
+    if (what === 'log') { open.has(name) ? open.delete(name) : open.add(name); return refresh(); }
+    if (what === 'stop' && !confirm(`Stop ${name}? It stays stopped until you start it again (or the supervisor restarts).`)) return;
+    b.disabled = true;
+    try {
+      const r = await api(`/api/${what}/${encodeURIComponent(name)}`, 'POST');
+      toast(what === 'update' ? (r.updated ? `${name} updated and restarted` : r.error || `${name} is up to date`) : `${name}: ${what === 'stop' ? 'stopped' : what === 'start' ? 'started' : 'restarted'}`);
+    } catch (err) { toast(err.message); }
+    refresh();
+  });
+  $('#check').addEventListener('click', () => api('/api/check', 'POST').then(() => toast('Checking every server for updates…')).catch((e) => toast(e.message)));
+  $('#reload').addEventListener('click', () => api('/api/reload', 'POST').then(() => { toast('servers.json applied'); setTimeout(refresh, 800); }).catch((e) => toast(e.message)));
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>

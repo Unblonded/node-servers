@@ -1,0 +1,7 @@
+# This PC's own list, logs and dashboard key: never in git, so updates never touch them
+servers.json
+logs/
+.dashboard-key
+dashboard.url
+node-path.txt
+node_modules/

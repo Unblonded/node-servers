@@ -1,0 +1,19 @@
+{
+  "checkEvery": 60,
+  "dashboardPort": 3399,
+  "servers": [
+    {
+      "name": "capri",
+      "dir": "C:\\Users\\you\\capri",
+      "start": "node server.js",
+      "update": "node scripts/update.mjs"
+    },
+    {
+      "name": "another-server",
+      "enabled": false,
+      "dir": "C:\\path\\to\\another-server",
+      "start": "npm start",
+      "env": { "PORT": "4000" }
+    }
+  ]
+}
