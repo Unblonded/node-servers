@@ -286,7 +286,7 @@
         <span class="name">${esc(s.name)}</span><span class="pill ${esc(state)}">${esc(state)}</span>${chips}
         <div class="actions">
           ${main}
-          ${s.git ? `<button data-do="update" ${s.updating ? 'disabled' : ''}>${s.updating ? 'Updating…' : 'Update'}</button>` : ''}
+          ${s.git ? `<button data-do="update" ${s.busy ? 'disabled' : ''}>${s.updating ? 'Updating…' : s.busy ? 'Checking…' : 'Update'}</button>` : ''}
           ${!off ? `<button class="danger" data-do="stop">Stop</button>` : ''}
           <button data-do="log">${open.has(s.name) ? 'Hide log' : 'Log'}</button>
           <details class="more"><summary title="More">⋯</summary><div class="menu">

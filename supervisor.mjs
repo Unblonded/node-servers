@@ -559,7 +559,7 @@ function statusJson() {
   return [...servers.values()].map((s) => ({
     name: s.cfg.name, dir: s.cfg.dir, start: s.cfg.start, how: s.cfg.how, status: s.held ? 'stopped' : s.status, pid: s.child?.pid || null,
     upSince: s.child ? s.startedAt : null, restarts: s.restarts, error: s.error, git: isRepo(s.cfg.dir) && s.cfg.update !== false,
-    lastCheck: s.lastCheck || null, lastUpdate: s.lastUpdate, updating: s.updating, disabled: s.cfg.disabled, repo: s.repo,
+    lastCheck: s.lastCheck || null, lastUpdate: s.lastUpdate, updating: s.status === 'updating', busy: s.updating, disabled: s.cfg.disabled, repo: s.repo,
     healthUrl: s.cfg.health, health: s.health, clash: s.clash, mem: s.mem, cpu: s.cpu, ports: s.ports, history: s.history.map(([, mem]) => mem),
   }));
 }
